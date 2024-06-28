@@ -1,0 +1,8 @@
+base_path: "https://certs.lauka-home.net"
+disable_certificate_validation: true
+
+
+certificates:
+  - name: test.laura.ovh
+    api_key: CiwnqR3rF1KZhGCRMsydSHkKksdeeFPA
+    action: ""
