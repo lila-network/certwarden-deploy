@@ -5,6 +5,9 @@ import "log/slog"
 var Config *ConfigFileData
 var ConfigFile *string
 var Logger *slog.Logger
+var DryRun bool
+var QuietLogging bool
+var VerboseLogging bool
 
 type ConfigFileData struct {
 	BaseURL                      string            `yaml:"base_url"`
