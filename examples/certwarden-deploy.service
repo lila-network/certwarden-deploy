@@ -1,0 +1,13 @@
+[Unit]
+Description=CertWarden Deployer binary
+Documentation=https://code.lila.network/adoralaura/certwarden-deploy
+
+[Service]
+# uncomment if you want to use a different user than root
+# User=certwarden-deploy
+# Group=certwarden-deploy
+ExecStart=/usr/local/bin/certwarden-deploy
+
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,10 @@
+[Unit]
+Description=Timer for certwarden-deploy
+
+[Timer]
+Persistent=true
+OnCalendar=Sat *-*-* 04:00:00
+RandomizedDelaySec=2h
+
+[Install]
+WantedBy=timers.target
