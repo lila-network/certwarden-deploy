@@ -37,5 +37,7 @@ func handleRootCmd(cmd *cobra.Command, args []string) {
 		slog.Error("failed to initialize sentry", "error", err)
 	}
 
+	configuration.ValidateConfig(log, *config)
+
 	certificates.HandleCertificates(log, config)
 }

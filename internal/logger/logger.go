@@ -10,9 +10,11 @@ import (
 
 func InitializeLogger() *slog.Logger {
 	logLevel := slog.LevelInfo
+	sourceLogging := false
 
 	if configuration.VerboseLogging {
 		logLevel = slog.LevelDebug
+		sourceLogging = true
 	}
 	if configuration.QuietLogging {
 		logLevel = slog.LevelError
@@ -22,7 +24,8 @@ func InitializeLogger() *slog.Logger {
 	}
 
 	opts := &slog.HandlerOptions{
-		Level: logLevel,
+		Level:     logLevel,
+		AddSource: sourceLogging,
 	}
 
 	handler := slog.NewTextHandler(os.Stdout, opts)

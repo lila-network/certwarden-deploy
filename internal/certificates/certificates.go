@@ -11,6 +11,8 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
+	"strings"
 	"time"
 
 	"code.lila.network/adoralaura/certwarden-deploy/internal/configuration"
@@ -38,25 +40,51 @@ func HandleCertificates(logger *slog.Logger, config *configuration.ConfigFileDat
 			return
 		}
 
-		if certIsDifferent {
+		if certIsDifferent || configuration.Force {
+			if configuration.Force {
+				logger.Info("Forcing file system change due to --force", "cert-id", cert.Name)
+			}
+
 			err = updateCertOnFS(logger, cert.FilePath, certBytes)
 			if err != nil {
 				logger.Error("failed to handle certificate", "cert-id", cert.Name, "error", err)
 				return
 			}
+
+			if configuration.Force {
+				logger.Info("Forcing file system change due to --force", "cert-id", cert.Name)
+			}
+			err = handleCertificateAction(cert)
+			if err != nil {
+				logger.Error("post certificate change command failed", "cert-id", cert.Name, "error", err)
+			}
 		}
 
 		logger.Info("Certificate updated successfully", "cert-id", cert.Name)
+
 	}
 }
 
-func checkCertIsDifferent(logger *slog.Logger, path string, data []byte) (bool, error) {
+func getCertFromFile(path string) ([]byte, error) {
 	filebytes, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return []byte{}, err
+		} else {
+			return []byte{}, fmt.Errorf("failed to read certificate file on disk: %w", err)
+		}
+	}
+	return filebytes, nil
+}
+
+func checkCertIsDifferent(logger *slog.Logger, path string, data []byte) (bool, error) {
+	filebytes, err := getCertFromFile(path)
+
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return true, nil
 		} else {
-			return false, fmt.Errorf("failed to read certificate file on disk: %w", err)
+			return false, fmt.Errorf("failed to compare certificates: %w", err)
 		}
 	}
 
@@ -158,4 +186,19 @@ func getCertFromServer(logger *slog.Logger, certName string, certKey string, bas
 	}
 
 	return body, nil
+}
+
+func handleCertificateAction(cert configuration.CertificateData) error {
+	if cert.Action == "" {
+		return nil
+	}
+
+	action := strings.ReplaceAll(cert.Action, "{name}", cert.Name)
+	action = strings.ReplaceAll(action, "{path}", cert.FilePath)
+
+	sargs := strings.Split(action, " ")
+
+	cmd := exec.Command(sargs[0], sargs...)
+	err := cmd.Run()
+	return err
 }
