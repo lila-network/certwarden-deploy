@@ -198,7 +198,7 @@ func handleCertificateAction(cert configuration.CertificateData) error {
 
 	sargs := strings.Split(action, " ")
 
-	cmd := exec.Command(sargs[0], sargs...)
+	cmd := exec.Command(sargs[0], sargs[1:]...)
 	err := cmd.Run()
 	return err
 }
