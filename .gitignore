@@ -27,3 +27,5 @@ examples/testing/
 
 *.toml
 !examples/*.toml
+
+test/

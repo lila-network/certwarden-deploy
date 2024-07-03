@@ -1,17 +1,41 @@
 package cli
 
-import "github.com/spf13/cobra"
+import (
+	"log/slog"
+	"os"
+
+	"code.lila.network/adoralaura/certwarden-deploy/internal/certificates"
+	"code.lila.network/adoralaura/certwarden-deploy/internal/configuration"
+	"code.lila.network/adoralaura/certwarden-deploy/internal/constants"
+	"code.lila.network/adoralaura/certwarden-deploy/internal/errlog"
+	"code.lila.network/adoralaura/certwarden-deploy/internal/logger"
+	"github.com/spf13/cobra"
+)
 
 var RootCmd = &cobra.Command{
 	Use:   "certwarden-deploy",
-	Short: "A brief description of your application",
-	Long: `A longer description that spans multiple lines and likely contains
-examples and usage of using your application. For example:
+	Short: "Deploy Certificates from CertWarden in a breeze",
+	Long: `certwarden-deploy is a CLI utility to deploy certificates managed by CertWarden.
+Configuration is handled by a single YAML file, so you can get started quickly.
 
-Cobra is a CLI library for Go that empowers applications.
-This application is a tool to generate the needed files
-to quickly create a Cobra application.`,
-	// Uncomment the following line if your bare application
-	// has an action associated with it:
-	// Run: func(cmd *cobra.Command, args []string) { },
+For more information on how to configure this tool, visit the docs at https://certwarden-deploy.adora.codes`,
+	Version:           constants.Version,
+	CompletionOptions: cobra.CompletionOptions{DisableDefaultCmd: true},
+	Args:              cobra.ExactArgs(0),
+	Run:               handleRootCmd,
+}
+
+func handleRootCmd(cmd *cobra.Command, args []string) {
+	config, err := configuration.InitializeConfig()
+	if err != nil {
+		slog.Error("failed to initialize config", "error", err)
+		os.Exit(1)
+	}
+	log := logger.InitializeLogger()
+	err = errlog.SetupSentry(log, config.Sentry.DSN)
+	if err != nil {
+		slog.Error("failed to initialize sentry", "error", err)
+	}
+
+	certificates.HandleCertificates(log, config)
 }

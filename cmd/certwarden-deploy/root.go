@@ -6,14 +6,12 @@ package cmd
 
 import (
 	"os"
+	"time"
 
 	"code.lila.network/adoralaura/certwarden-deploy/internal/cli"
-	"code.lila.network/adoralaura/certwarden-deploy/internal/config"
-	"code.lila.network/adoralaura/certwarden-deploy/internal/logger"
-	"github.com/spf13/cobra"
+	"code.lila.network/adoralaura/certwarden-deploy/internal/configuration"
+	"github.com/getsentry/sentry-go"
 )
-
-var cfgFile string
 
 // Execute adds all child commands to the root command and sets flags appropriately.
 // This is called by main.main(). It only needs to happen once to the rootCmd.
@@ -22,14 +20,14 @@ func Execute() {
 	if err != nil {
 		os.Exit(1)
 	}
+	defer sentry.Flush(2 * time.Second)
 }
 
 func init() {
-	cobra.OnInitialize(config.InitializeConfig, logger.InitializeLogger)
 
-	cli.RootCmd.PersistentFlags().BoolVarP(&config.VerboseLogging, "verbose", "v", false, "Enable verbose logging")
-	cli.RootCmd.PersistentFlags().BoolVarP(&config.DryRun, "dry-run", "d", false, "Just show the would-be changes without changing the file system")
-	cli.RootCmd.PersistentFlags().BoolVarP(&config.QuietLogging, "quiet", "q", false, "Disable any logging (if both -q and -v are set, quiet wins)")
-	cli.RootCmd.PersistentFlags().StringVarP(&config.ConfigFile, "config", "c", "/etc/certwarden-deploy/config.yaml", "Path to config file (default is /etc/certwarden-deploy/config.yaml)")
+	cli.RootCmd.PersistentFlags().BoolVarP(&configuration.VerboseLogging, "verbose", "v", false, "Enable verbose logging")
+	cli.RootCmd.PersistentFlags().BoolVarP(&configuration.DryRun, "dry-run", "d", false, "Just show the would-be changes without changing the file system (turns on verbose logging)")
+	cli.RootCmd.PersistentFlags().BoolVarP(&configuration.QuietLogging, "quiet", "q", false, "Disable any logging (if both -q and -v are set, quiet wins)")
+	cli.RootCmd.PersistentFlags().StringVarP(&configuration.ConfigFile, "config", "c", "/etc/certwarden-deploy/config.yaml", "Path to config file (default is /etc/certwarden-deploy/config.yaml)")
 
 }

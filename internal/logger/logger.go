@@ -3,18 +3,22 @@ package logger
 import (
 	"log/slog"
 	"os"
+	"strconv"
 
-	"code.lila.network/adoralaura/certwarden-deploy/internal/config"
+	"code.lila.network/adoralaura/certwarden-deploy/internal/configuration"
 )
 
-func InitializeLogger() {
+func InitializeLogger() *slog.Logger {
 	logLevel := slog.LevelInfo
 
-	if config.VerboseLogging {
+	if configuration.VerboseLogging {
 		logLevel = slog.LevelDebug
 	}
-	if config.QuietLogging {
+	if configuration.QuietLogging {
 		logLevel = slog.LevelError
+	}
+	if configuration.DryRun {
+		logLevel = slog.LevelDebug
 	}
 
 	opts := &slog.HandlerOptions{
@@ -22,6 +26,11 @@ func InitializeLogger() {
 	}
 
 	handler := slog.NewTextHandler(os.Stdout, opts)
+	log := slog.New(handler)
 
-	slog.SetDefault(slog.New(handler))
+	log.Debug("configuration.VerboseLogging is " + strconv.FormatBool(configuration.VerboseLogging))
+	log.Debug("configuration.QuietLogging is " + strconv.FormatBool(configuration.QuietLogging))
+	log.Debug("configuration.DryRun is " + strconv.FormatBool(configuration.DryRun))
+
+	return log
 }
