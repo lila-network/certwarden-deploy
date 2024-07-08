@@ -59,8 +59,11 @@ func HandleCertificates(logger *slog.Logger, config *configuration.ConfigFileDat
 				logger.Error("post certificate change command failed", "cert-id", cert.Name, "error", err)
 			}
 		}
-
-		logger.Info("Certificate updated successfully", "cert-id", cert.Name)
+		if certIsDifferent {
+			logger.Info("New certificate rolled out", "cert-id", cert.Name)
+		} else {
+			logger.Info("Certificate not changed, skipping...", "cert-id", cert.Name)
+		}
 
 	}
 }
