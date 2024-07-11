@@ -7,7 +7,6 @@ import (
 	"code.lila.network/adoralaura/certwarden-deploy/internal/certificates"
 	"code.lila.network/adoralaura/certwarden-deploy/internal/configuration"
 	"code.lila.network/adoralaura/certwarden-deploy/internal/constants"
-	"code.lila.network/adoralaura/certwarden-deploy/internal/errlog"
 	"code.lila.network/adoralaura/certwarden-deploy/internal/logger"
 	"github.com/spf13/cobra"
 )
@@ -32,12 +31,14 @@ func handleRootCmd(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 	log := logger.InitializeLogger()
-	err = errlog.SetupSentry(log, config.Sentry.DSN)
-	if err != nil {
-		slog.Error("failed to initialize sentry", "error", err)
-	}
+	config.SubstituteKeys(log)
 
-	configuration.ValidateConfig(log, *config)
+	validation := config.IsValid()
+	if validation.HasMessages() {
+		validation.Print(log)
+		slog.Error("The configuration file has errors! Application cannot start unless all errors are corrected!")
+		panic(1)
+	}
 
 	certificates.HandleCertificates(log, config)
 }
