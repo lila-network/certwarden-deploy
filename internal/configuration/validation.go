@@ -1,45 +1,38 @@
 package configuration
 
 import (
-	"log/slog"
-	"os"
 	"regexp"
 )
 
-func ValidateConfig(logger *slog.Logger, config ConfigFileData) {
-	validationFailed := false
+// IsValid tests if the config read from file has all required parameters set.
+//
+// Exits the app if errors are detected
+func (c *ConfigFileData) IsValid() ConfigValidationError {
+	err := ConfigValidationError{}
 
-	if config.BaseURL == "" {
-		logger.Error(`Field 'base_url' in config file is required!`)
-		validationFailed = true
+	if c.BaseURL == "" {
+		err.Add(`Field 'base_url' in config file is required!`)
 	}
 
-	for _, cert := range config.Certificates {
+	for _, cert := range c.Certificates {
 		if cert.Name == "" {
 			cert.Name = "unnamed_certificate"
-			logger.Error(`Field 'name' for certificates cannot be blank!`)
-			validationFailed = true
+			err.Add(`Field 'name' for certificates cannot be blank!`)
 		}
 
-		if cert.ApiKey == "" {
-			logger.Error(`Field 'api_key' for certificate ` + cert.Name + " cannot be blank!")
-			validationFailed = true
+		if cert.CertificateSecret == "" {
+			err.Add(`Field 'cert_secret' for certificate ` + cert.Name + " cannot be blank!")
 		}
 
-		if cert.FilePath == "" {
-			logger.Error(`Field 'file_path' for certificate ` + cert.Name + " cannot be blank!")
-			validationFailed = true
+		if cert.CertificatePath == "" {
+			err.Add(`Field 'cert_path' for certificate ` + cert.Name + " cannot be blank!")
 		}
 
 		re := regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
 		if !re.MatchString(cert.Name) {
-			logger.Error(`Field 'name' for certificate may only contain -_. and alphanumeric characters!`)
-			validationFailed = true
+			err.Add(`Field 'name' for certificate may only contain -_. and alphanumeric characters!`)
 		}
 	}
 
-	if validationFailed {
-		logger.Error("Config file has errors! Please fix errors above! Exiting...", "config-path", ConfigFile)
-		os.Exit(1)
-	}
+	return err
 }

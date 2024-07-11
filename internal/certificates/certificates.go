@@ -17,126 +17,187 @@ import (
 
 	"code.lila.network/adoralaura/certwarden-deploy/internal/configuration"
 	"code.lila.network/adoralaura/certwarden-deploy/internal/constants"
-	"github.com/getsentry/sentry-go"
 )
 
 func HandleCertificates(logger *slog.Logger, config *configuration.ConfigFileData) {
 	for _, cert := range config.Certificates {
-		certBytes, err := getCertFromServer(
-			logger,
-			cert.Name,
-			cert.ApiKey,
-			config.BaseURL,
-			config.DisableCertificateValidation,
-		)
+		certInfos := GenericCertificate{
+			Name:     cert.Name,
+			FilePath: cert.CertificatePath,
+			Secret:   cert.CertificateSecret,
+			IsKey:    false,
+		}
+
+		keyInfos := GenericCertificate{
+			Name:     cert.Name,
+			FilePath: cert.KeyPath,
+			Secret:   cert.KeySecret,
+			IsKey:    true,
+		}
+
+		// Rollout Certificate
+		certOnDiskChanged, err := certInfos.Rollout(logger, config.BaseURL, config.DisableCertificateValidation)
 		if err != nil {
-			logger.Error("Failed to get certificate from server", "cert-id", cert.Name, "error", err)
-			return
+			logger.Error(
+				"Failed to roll out Certificate", "path",
+				certInfos.FilePath, "name", cert.Name, "error", err,
+			)
+			continue
 		}
 
-		certIsDifferent, err := checkCertIsDifferent(logger, cert.FilePath, certBytes)
+		// Rollout Key
+		keyOnDiskChanged, err := keyInfos.Rollout(logger, config.BaseURL, config.DisableCertificateValidation)
 		if err != nil {
-			logger.Error("failed to handle certificate", "cert-id", cert.Name, "error", err)
-			return
+			logger.Error(
+				"Failed to roll out Key", "path",
+				keyInfos.FilePath, "name", cert.Name, "error", err,
+			)
+			continue
 		}
 
-		if certIsDifferent || configuration.Force {
-			if configuration.Force {
-				logger.Info("Forcing file system change due to --force", "cert-id", cert.Name)
-			}
-
-			err = updateCertOnFS(logger, cert.FilePath, certBytes)
-			if err != nil {
-				logger.Error("failed to handle certificate", "cert-id", cert.Name, "error", err)
-				return
-			}
+		// if cert OR key changed OR --force
+		if (certOnDiskChanged || keyOnDiskChanged) || configuration.Force {
 
 			if configuration.Force {
-				logger.Info("Forcing file system change due to --force", "cert-id", cert.Name)
+				logger.Info("Forcing file system change due to --force", "name", cert.Name)
 			}
-			err = handleCertificateAction(cert)
+			err = handleCertificateAction(cert.Action)
 			if err != nil {
-				logger.Error("post certificate change command failed", "cert-id", cert.Name, "error", err)
+				logger.Error("Failed to execute post-rollout action", "name", cert.Name, "error", err)
 			}
 		}
-		if certIsDifferent {
-			logger.Info("New certificate rolled out", "cert-id", cert.Name)
-		} else {
-			logger.Info("Certificate not changed, skipping...", "cert-id", cert.Name)
-		}
-
 	}
 }
 
-func getCertFromFile(path string) ([]byte, error) {
-	filebytes, err := os.ReadFile(path)
+// Rollout handles getting the certificate/key data from the
+// server and writing it to disk if the data differs.
+//
+// Returns error on error, true if certificate action needs to be executed, false if not
+func (c *GenericCertificate) Rollout(logger *slog.Logger, baseUrl string, skipInsecure bool) (bool, error) {
+	err := c.fetchFromServer(
+		logger,
+		baseUrl,
+		skipInsecure,
+	)
+	if err != nil {
+		return false, fmt.Errorf("failed to get certificate from server: %w", err)
+	}
+
+	fileNeedsRollout, err := c.needsRollout(logger)
+	if err != nil {
+		return false, fmt.Errorf("failed to check certificate on disk: %w", err)
+	}
+
+	if fileNeedsRollout || configuration.Force {
+		if configuration.Force {
+			logger.Info("Forcing file system change due to --force", "name", c.Name)
+		}
+
+		err = c.writeToDisk(logger)
+		if err != nil {
+			return false, fmt.Errorf("failed to handle certificate: %w", err)
+		}
+
+	}
+	if fileNeedsRollout {
+		logger.Info("New file deployed", "path", c.FilePath)
+		return true, nil
+	} else {
+		logger.Info("File not changed, skipping...", "path", c.FilePath)
+		return false, nil
+	}
+}
+
+// readFromDisk reads file data from disk and populates the data []byte field.
+//
+// Returns error or nil on success
+func (c *GenericCertificate) readFromDisk() error {
+	filebytes, err := os.ReadFile(c.FilePath)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return []byte{}, err
+			return err
 		} else {
-			return []byte{}, fmt.Errorf("failed to read certificate file on disk: %w", err)
+			return fmt.Errorf("failed to read file from disk: %w", err)
 		}
 	}
-	return filebytes, nil
+
+	c.diskBytes = filebytes
+	return nil
 }
 
-func checkCertIsDifferent(logger *slog.Logger, path string, data []byte) (bool, error) {
-	filebytes, err := getCertFromFile(path)
+// needsRollout checks the data []bytes against the data on disk.
+//
+// Returns true if file needs rollout, false if not
+func (c *GenericCertificate) needsRollout(logger *slog.Logger) (bool, error) {
+	err := c.readFromDisk()
 
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return true, nil
 		} else {
-			return false, fmt.Errorf("failed to compare certificates: %w", err)
+			return false, fmt.Errorf("failed to compare data to file on disk: %w", err)
 		}
 	}
 
-	existingSha256 := sha256.Sum256(filebytes)
-	newSha256 := sha256.Sum256(data)
+	diskHash := sha256.Sum256(c.diskBytes)
+	serverHash := sha256.Sum256(c.serverBytes)
 
-	sumsAreDifferent := existingSha256 != newSha256
-	if sumsAreDifferent {
-		logger.Debug("Certificate on file differs from the certificate on the server", "cert-path", path)
+	hashesAreDifferent := diskHash != serverHash
+	if hashesAreDifferent {
+		logger.Debug("File on disk differs from server source", "path", c.FilePath)
 	} else {
-		logger.Debug("Certificate on file is identical to the certificate on the server", "cert-path", path)
+		logger.Debug("File on disk is identical to server source", "path", c.FilePath)
 	}
 
-	return sumsAreDifferent, nil
+	return hashesAreDifferent, nil
 }
 
-func updateCertOnFS(logger *slog.Logger, path string, data []byte) error {
+// writeToDisk flushes the certificate data to disk.
+//
+// Returns error or nil on success.
+func (c *GenericCertificate) writeToDisk(logger *slog.Logger) error {
 	if configuration.DryRun {
-		logger.Debug("DRY-RUN: writing certificate data to file", "cert-path", path)
+		logger.Debug("DRY-RUN: writing data to file", "path", c.FilePath)
 		return nil
 	}
 
-	file, err := os.Create(path)
+	file, err := os.Create(c.FilePath)
 	if err != nil {
-		return fmt.Errorf("failed to open certificate for writing: %w", err)
+		return fmt.Errorf("failed to open file for writing: %w", err)
 	}
 
 	defer func(l *slog.Logger) {
 		if err := file.Close(); err != nil {
-			l.Error("failed to close file", "file-path", path, "error", err)
+			l.Error("failed to close file", "path", c.FilePath, "error", err)
 		}
 	}(logger)
 
 	w := bufio.NewWriter(file)
 
-	if _, err := w.Write(data); err != nil {
-		return fmt.Errorf("failed to write certificate data to file: %w", err)
+	if _, err := w.Write(c.serverBytes); err != nil {
+		return fmt.Errorf("failed to write data to file: %w", err)
 	}
 
 	if err = w.Flush(); err != nil {
-		return fmt.Errorf("failed to flush certificate data to file: %w", err)
+		return fmt.Errorf("failed to flush data to file: %w", err)
 	}
 
-	logger.Debug("wrote certificate to file", "file-path", path)
+	logger.Debug("Successfully wrote to file", "path", c.FilePath)
 	return nil
 }
 
-func getCertFromServer(logger *slog.Logger, certName string, certKey string, baseUrl string, skipInsecure bool) ([]byte, error) {
-	url := baseUrl + constants.CertificateApiPath + certName
+// fetchFromServer fetches the cert/key data from the CertWarden server and
+// fills the serverBytes field.
+//
+// Returns error or nil on success.
+func (c *GenericCertificate) fetchFromServer(logger *slog.Logger, baseUrl string, skipInsecure bool) error {
+	var url string
+	if c.IsKey {
+		url = baseUrl + constants.CertificateApiPath + c.Name
+	} else {
+		url = baseUrl + constants.CertificateApiPath + c.Name
+	}
+
 	logger.Debug("Certificate request URL: " + url)
 	var transport http.RoundTripper
 
@@ -155,17 +216,15 @@ func getCertFromServer(logger *slog.Logger, certName string, certKey string, bas
 	}
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		return []byte{}, fmt.Errorf("failed to prepare to request certificate from server: %w", err)
+		return fmt.Errorf("failed to prepare to request certificate from server: %w", err)
 	}
 
 	req.Header.Set("User-Agent", constants.UserAgent)
-	req.Header.Add(constants.ApiKeyHeaderName, certKey)
+	req.Header.Add(constants.ApiKeyHeaderName, c.Secret)
 
 	res, err := client.Do(req)
 	if err != nil {
-		e := fmt.Errorf("failed to request certificate from server: %w", err)
-		sentry.CaptureException(e)
-		return []byte{}, e
+		return fmt.Errorf("failed to request certificate from server: %w", err)
 	}
 
 	defer func(l *slog.Logger) {
@@ -175,29 +234,26 @@ func getCertFromServer(logger *slog.Logger, certName string, certKey string, bas
 	}(logger)
 
 	if res.StatusCode == http.StatusUnauthorized {
-		logger.Error("API-Key for Certificate is invalid, skipping certificate!", "cert-id", certName)
-		return []byte{}, errors.New("API-Key invalid")
+		logger.Error("API-Key for Certificate is invalid, skipping certificate!", "name", c.Name)
+		return errors.New("API-Key invalid")
 	} else if res.StatusCode != http.StatusOK {
-		logger.Error("failed to get certificate from server", "cert-id", certName, "http-response", res.Status)
+		logger.Error("failed to get certificate from server", "name", c.Name, "http-response", res.Status)
 	}
 
-	body, err := io.ReadAll(res.Body)
+	bodyBytes, err := io.ReadAll(res.Body)
 	if err != nil {
-		e := fmt.Errorf("failed to read certificate response from server: %w", err)
-		sentry.CaptureException(e)
-		return []byte{}, e
+		return fmt.Errorf("failed to read certificate response from server: %w", err)
 	}
 
-	return body, nil
+	c.serverBytes = bodyBytes
+	return nil
 }
 
-func handleCertificateAction(cert configuration.CertificateData) error {
-	if cert.Action == "" {
+// handleCertificateAction executes the user-defined action after successful certificate deployment
+func handleCertificateAction(action string) error {
+	if action == "" {
 		return nil
 	}
-
-	action := strings.ReplaceAll(cert.Action, "{name}", cert.Name)
-	action = strings.ReplaceAll(action, "{path}", cert.FilePath)
 
 	sargs := strings.Split(action, " ")
 
