@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.2.0] - 2024-07-11
 ### ⚠️ Breaking Changes
-- Config file syntax was changed to accomodate both private and public key for certificates. 
+- Config file syntax was changed to accomodate both private and public key deployment for certificates. 
 
     This change is __NOT__ backwards compatible!
     The following yaml keys were changed/added:
@@ -19,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - added keys: `key_secret`, `key_path`
 
 ### Changed
-- config file syntax to accomodate private keys too
+- config file syntax to enable deployment of private keys too
 - refactor code
 
 ## [0.1.1] - 2024-07-03
