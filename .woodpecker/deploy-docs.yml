@@ -1,0 +1,38 @@
+when:
+  - event: push
+    branch: main
+    path: 
+      include:
+        - 'docs/**'
+        - '.woodpecker/deploy-docs.yml'
+      ignore_message: '[ALL]'
+
+steps:
+  build:
+    image: golang:1.22-bookworm
+    environment:
+      - HUGO_VERSION=0.128.1
+      - TZ=Europe/Berlin
+
+    commands:
+      - cd docs/
+      - wget https://github.com/gohugoio/hugo/releases/download/v$${HUGO_VERSION}/hugo_extended_$${HUGO_VERSION}_linux-amd64.deb && apt install ./hugo_extended_$${HUGO_VERSION}_linux-amd64.deb && rm -f hugo_extended_$${HUGO_VERSION}_linux-amd64.deb
+      - hugo --minify --destination ./public
+
+  upload:
+    image: alpine:latest
+    secrets:
+      - RSYNC_SSHKEY
+      - RSYNC_TARGET_SERVER
+      - RSYNC_TARGET_USER
+    environment:
+      - TARGET_PATH=/webroot/certwarden-deploy.adora.codes
+      - RSYNC_TARGET_PORT=2003
+    commands:
+      - cd docs/
+      - apk add --update --no-cache openssh rsync git
+      - mkdir -p $HOME/.ssh
+      - echo "$RSYNC_SSHKEY" > $HOME/.ssh/id_ed25519
+      - chmod 0600 $HOME/.ssh/id_ed25519
+      - ssh-keyscan -t ed25519 -p $RSYNC_TARGET_PORT $RSYNC_TARGET_SERVER >> $HOME/.ssh/known_hosts
+      - rsync -avh -e "ssh -p $RSYNC_TARGET_PORT" --delete ./public/ $RSYNC_TARGET_USER@$RSYNC_TARGET_SERVER:$TARGET_PATH

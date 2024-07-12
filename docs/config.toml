@@ -1,0 +1,18 @@
+baseURL = 'https://certwarden-deploy.adora.codes/'
+languageCode = 'en-us'
+title = 'certwarden-deploy'
+
+theme = "code.lila.network/adoralaura/hugo-book-theme"
+
+
+
+[params]
+  # (Optional, default light) Sets color theme: light, dark or auto.
+  # Theme 'auto' switches between dark and light modes based on browser/os preferences
+  BookTheme = 'auto'
+  BookRepo = 'https://code.lila.network/adoralaura/certwarden-deploy'
+
+
+[module]
+  [[module.imports]]
+    path = "code.lila.network/adoralaura/hugo-book-theme"
