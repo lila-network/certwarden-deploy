@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 ## [Unreleased]
+## [0.2.1] - 2024-07-12
+### Fixed
+- Configuration validation did not work as intended
+
+### Changed
+- updated example config file
 
 ## [0.2.0] - 2024-07-11
 ### ⚠️ Breaking Changes
@@ -34,7 +40,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - some documentation
 
 
-[unreleased]: https://code.lila.network/adoralaura/certwarden-deploy/compare/0.2.0...HEAD
+[unreleased]: https://code.lila.network/adoralaura/certwarden-deploy/compare/0.2.1...HEAD
+[0.2.1]: https://code.lila.network/adoralaura/certwarden-deploy/compare/0.2.0...0.2.1
 [0.2.0]: https://code.lila.network/adoralaura/certwarden-deploy/compare/0.1.1...0.2.0
 [0.1.1]: https://code.lila.network/adoralaura/certwarden-deploy/compare/0.1.0...0.1.1
 [0.1.0]: https://code.lila.network/adoralaura/certwarden-deploy/releases/tag/0.1.0
