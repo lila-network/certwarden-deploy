@@ -30,7 +30,7 @@ func handleRootCmd(cmd *cobra.Command, args []string) {
 		slog.Error("failed to initialize config", "error", err)
 		os.Exit(1)
 	}
-	log := logger.InitializeLogger()
+	log := logger.Initialize()
 	config.SubstituteKeys(log)
 
 	validation := config.IsValid()

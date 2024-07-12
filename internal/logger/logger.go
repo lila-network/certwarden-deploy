@@ -8,7 +8,8 @@ import (
 	"code.lila.network/adoralaura/certwarden-deploy/internal/configuration"
 )
 
-func InitializeLogger() *slog.Logger {
+// Initialize initializes a *slog.Logger with the right log level and options.
+func Initialize() *slog.Logger {
 	logLevel := slog.LevelInfo
 
 	if configuration.VerboseLogging {
