@@ -24,7 +24,6 @@ var Force bool
 type ConfigFileData struct {
 	BaseURL                      string            `yaml:"base_url"`
 	DisableCertificateValidation bool              `yaml:"disable_certificate_validation"`
-	Sentry                       SentryData        `yaml:"sentry,omitempty"`
 	Certificates                 []CertificateData `yaml:"certificates"`
 }
 
@@ -36,10 +35,6 @@ type CertificateData struct {
 	KeySecret         string `yaml:"key_secret"`
 	KeyPath           string `yaml:"key_path"`
 	Action            string `yaml:"action"`
-}
-
-type SentryData struct {
-	DSN string `yaml:"dsn"`
 }
 
 type ConfigValidationError struct {

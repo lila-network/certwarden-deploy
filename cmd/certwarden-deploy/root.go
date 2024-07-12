@@ -6,11 +6,9 @@ package cmd
 
 import (
 	"os"
-	"time"
 
 	"code.lila.network/adoralaura/certwarden-deploy/internal/cli"
 	"code.lila.network/adoralaura/certwarden-deploy/internal/configuration"
-	"github.com/getsentry/sentry-go"
 )
 
 // Execute adds all child commands to the root command and sets flags appropriately.
@@ -20,7 +18,6 @@ func Execute() {
 	if err != nil {
 		os.Exit(1)
 	}
-	defer sentry.Flush(2 * time.Second)
 }
 
 func init() {
