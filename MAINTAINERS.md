@@ -1,1 +1,1 @@
-* Adora Laura Kalb <adora@lila.network> @adoralaura
+* Adora Laura Kalb <dev@lauka.net> @adoralaura
