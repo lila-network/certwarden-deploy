@@ -102,6 +102,9 @@ func (c *GenericCertificate) Rollout(logger *slog.Logger, baseUrl string, skipIn
 	if fileNeedsRollout {
 		logger.Info("New file deployed", "path", c.FilePath)
 		return true, nil
+	} else if configuration.Force {
+		logger.Info("File deployed", "path", c.FilePath)
+		return true, nil
 	} else {
 		logger.Info("File not changed, skipping...", "path", c.FilePath)
 		return false, nil
@@ -192,22 +195,25 @@ func (c *GenericCertificate) writeToDisk(logger *slog.Logger) error {
 // Returns error or nil on success.
 func (c *GenericCertificate) fetchFromServer(logger *slog.Logger, baseUrl string, skipInsecure bool) error {
 	var url string
+	var fileType string
 	if c.IsKey {
-		url = baseUrl + constants.CertificateApiPath + c.Name
+		url = baseUrl + constants.KeyApiPath + c.Name
+		fileType = "privatekey"
 	} else {
 		url = baseUrl + constants.CertificateApiPath + c.Name
+		fileType = "certificate"
 	}
 
-	logger.Debug("Certificate request URL: " + url)
+	logger.Debug("Data request URL: "+url, "file-type", fileType)
 	var transport http.RoundTripper
 
 	if skipInsecure {
-		logger.Debug("TLS Certificate Validation is disabled")
+		logger.Debug("Upstream Server TLS Certificate Validation is disabled")
 		transport = &http.Transport{
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 		}
 	} else {
-		logger.Debug("TLS Certificate Validation is enabled")
+		logger.Debug("Upstream Server HTTP TLS Certificate Validation is enabled")
 	}
 
 	client := &http.Client{
@@ -216,7 +222,7 @@ func (c *GenericCertificate) fetchFromServer(logger *slog.Logger, baseUrl string
 	}
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		return fmt.Errorf("failed to prepare to request certificate from server: %w", err)
+		return fmt.Errorf("failed to prepare to request data from server: %w", err)
 	}
 
 	req.Header.Set("User-Agent", constants.UserAgent)
@@ -224,7 +230,7 @@ func (c *GenericCertificate) fetchFromServer(logger *slog.Logger, baseUrl string
 
 	res, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("failed to request certificate from server: %w", err)
+		return fmt.Errorf("failed to request data from server: %w", err)
 	}
 
 	defer func(l *slog.Logger) {
@@ -234,15 +240,15 @@ func (c *GenericCertificate) fetchFromServer(logger *slog.Logger, baseUrl string
 	}(logger)
 
 	if res.StatusCode == http.StatusUnauthorized {
-		logger.Error("API-Key for Certificate is invalid, skipping certificate!", "name", c.Name)
+		logger.Error("API-Key for request is invalid, skipping certificate!", "name", c.Name, "file-type", fileType)
 		return errors.New("API-Key invalid")
 	} else if res.StatusCode != http.StatusOK {
-		logger.Error("failed to get certificate from server", "name", c.Name, "http-response", res.Status)
+		logger.Error("failed to get data from server", "name", c.Name, "http-response", res.Status, "file-type", fileType)
 	}
 
 	bodyBytes, err := io.ReadAll(res.Body)
 	if err != nil {
-		return fmt.Errorf("failed to read certificate response from server: %w", err)
+		return fmt.Errorf("failed to read response from server: %w", err)
 	}
 
 	c.serverBytes = bodyBytes

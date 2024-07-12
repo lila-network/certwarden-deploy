@@ -55,7 +55,7 @@ func (e *ConfigValidationError) Add(msg string) {
 }
 
 func (e *ConfigValidationError) HasMessages() bool {
-	return len(e.ErrorMessages) == 0
+	return len(e.ErrorMessages) != 0
 }
 
 func (e *ConfigValidationError) Print(logger *slog.Logger) {

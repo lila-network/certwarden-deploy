@@ -37,7 +37,7 @@ func handleRootCmd(cmd *cobra.Command, args []string) {
 	if validation.HasMessages() {
 		validation.Print(log)
 		slog.Error("The configuration file has errors! Application cannot start unless all errors are corrected!")
-		panic(1)
+		os.Exit(1)
 	}
 
 	certificates.HandleCertificates(log, config)
