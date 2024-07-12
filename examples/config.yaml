@@ -17,12 +17,20 @@ certificates:
 
     # Contains the API-Key to fetch the certificate from the server
     # required
+    cert_secret: examplekey_notvalid_hrzjGDDw8z
 
-    api_key: examplekey_notvalid_hrzjGDDw8z
+    # path where to save the certificate
+    # required
+    cert_path: "/path/to/test-certificate.example.com-cert.pem"
+
+    # Contains the API-Key to fetch the private key from the server
+    # required
+    key_secret: examplekey_notvalid_hrzbbDDw8z
+
+    # path where to save the private key
+    # required
+    key_path: "/path/to/test-certificate.example.com-key.pem"
 
     # action to run when certificate was updated or --force is on
     action: "/usr/bin/systemd reload caddy"
 
-    # path where to save the certificate
-    # required
-    file_path: "/path/to/test-certificate.example.com-cert.pem"
