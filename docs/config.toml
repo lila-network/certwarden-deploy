@@ -1,18 +1,51 @@
 baseURL = 'https://certwarden-deploy.adora.codes/'
 languageCode = 'en-us'
 title = 'certwarden-deploy'
+author = ""
 
-theme = "code.lila.network/adoralaura/hugo-book-theme"
+theme = "github.com/McShelby/hugo-theme-relearn"
+repo = "https://code.lila.network/adoralaura/certwarden-deploy"
 
+enableGitInfo = true
+enableRobotsTXT = true
+uniqueHomePage = false # change to false to add sidebar to homepage
 
 
 [params]
-  # (Optional, default light) Sets color theme: light, dark or auto.
-  # Theme 'auto' switches between dark and light modes based on browser/os preferences
-  BookTheme = 'auto'
-  BookRepo = 'https://code.lila.network/adoralaura/certwarden-deploy'
+  disableLandingPageButton = false
+  disableLanguageSwitchingButton = false
+  editURL = "https://code.lila.network/adoralaura/certwarden-deploy/_edit/main/docs/content/${FilePath}"
+  externalLinkTarget = "_blank"
 
 
-[module]
-  [[module.imports]]
-    path = "code.lila.network/adoralaura/hugo-book-theme"
+  [params.author]
+    name = 'Adora Laura Kalb'
+
+
+[menu]
+  [[menu.shortcuts]]
+    identifier = 'ds'
+    name = "<i class='fa-fw fas fa-code-branch'></i> Git repo"
+    url = 'https://code.lila.network/adoralaura/certwarden-deploy'
+    weight = 10
+
+  [[menu.shortcuts]]
+    name = "<i class='fa-fw fas fa-camera'></i> Showcases"
+    url = 'showcase/'
+    weight = 11
+
+  [[menu.shortcuts]]
+    identifier = 'hugodoc'
+    name = "<i class='fa-fw fas fa-bookmark'></i> Hugo Documentation"
+    url = 'https://gohugo.io/'
+    weight = 20
+
+  [[menu.shortcuts]]
+    name = "<i class='fa-fw fas fa-bullhorn'></i> Credits"
+    url = 'more/credits/'
+    weight = 30
+
+  [[menu.shortcuts]]
+    name = "<i class='fa-fw fas fa-tags'></i> Tags"
+    url = 'tags/'
+    weight = 40

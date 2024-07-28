@@ -1,9 +1,7 @@
 ---
-title: Introduction
+title: CertWarden-Deploy
 type: docs
 ---
-
-## CertWarden
 
 [CertWarden](https://www.certwarden.com/) is a self-hosted Centralized ACME Certificate Management platform. With it you can manage and aquire Let's Encrypt certificates.
 
