@@ -61,18 +61,17 @@ certwarden-deploy -v
 ```
 ## Contributing
 
-I use my own [Forgejo Instance](https://code.lila.network) to manage issues and pull requests.
+I use my own [Forgejo](https://forgejo.org/) Instance [code.lila.network](https://code.lila.network) to manage issues, pull requests and CI/CD.
 
-* If you have a trivial fix or improvement, go ahead and create a pull request,
-  addressing (with `@...`) the maintainer of this repository (see
-  [MAINTAINERS.md](MAINTAINERS.md)) in the description of the pull request.
+* If you have a trivial fix or improvement, go ahead and send a diff to the maintainer(s) of this repository (see
+  [MAINTAINERS.md](https://code.lila.network/adoralaura/certwarden-deploy/src/branch/main/MAINTAINERS.md)).
 
-* If you plan to do something more involved, first please [send me a mail]( mailto:dev@lauka.net?subject=%5Bcertwarden-deploy%5D).
+* If you plan to do something more involved, first please [send me a mail]( mailto:dev@lauka.net?subject=%5Bcertwarden-deploy%5D)mso I can create an account for you.
 
-### What to contribute
+### Non-development Contibutions
 
 The best way to help without speaking a lot of Go would be to share your
-configuration, alerts, dashboards, and recording rules. If you have something
+configuration, setup, and tips. If you have something
 that works and is not in the repository, please pay it forward and
 share what works.
 
