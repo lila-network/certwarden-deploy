@@ -18,9 +18,11 @@ uniqueHomePage = false # change to false to add sidebar to homepage
   externalLinkTarget = "_blank"
 
 
-  [params.author]
-    name = 'Adora Laura Kalb'
+[params.author]
+  name = 'Adora Laura Kalb'
 
+[outputs]
+  home = ['html', 'rss', 'search']
 
 [menu]
   [[menu.shortcuts]]
