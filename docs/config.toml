@@ -25,27 +25,27 @@ uniqueHomePage = false # change to false to add sidebar to homepage
 [menu]
   [[menu.shortcuts]]
     identifier = 'ds'
-    name = "<i class='fa-fw fas fa-code-branch'></i> Git repo"
+    name = "<i class='fa-fw fas fa-code-branch'></i> certwarden-deploy Git Repository"
     url = 'https://code.lila.network/adoralaura/certwarden-deploy'
     weight = 10
 
   [[menu.shortcuts]]
-    name = "<i class='fa-fw fas fa-camera'></i> Showcases"
+    name = "<i class='fa-fw fas fa-arrow-up-right-from-square'></i> CertWarden GitHub"
     url = 'showcase/'
     weight = 11
 
   [[menu.shortcuts]]
     identifier = 'hugodoc'
-    name = "<i class='fa-fw fas fa-bookmark'></i> Hugo Documentation"
+    name = "<i class='fa-fw fas fa-arrow-up-right-from-square'></i> CertWarden Website"
     url = 'https://gohugo.io/'
     weight = 20
 
-  [[menu.shortcuts]]
-    name = "<i class='fa-fw fas fa-bullhorn'></i> Credits"
-    url = 'more/credits/'
-    weight = 30
-
-  [[menu.shortcuts]]
-    name = "<i class='fa-fw fas fa-tags'></i> Tags"
-    url = 'tags/'
-    weight = 40
+#  [[menu.shortcuts]]
+#    name = "<i class='fa-fw fas fa-bullhorn'></i> Credits"
+#    url = 'more/credits/'
+#    weight = 30
+#
+#  [[menu.shortcuts]]
+#    name = "<i class='fa-fw fas fa-tags'></i> Tags"
+#    url = 'tags/'
+#    weight = 40
