@@ -25,9 +25,9 @@ sudo chmod +x /usr/local/bin/certwarden-deploy
 ```
 
 ... fill out the config file...
-```shell
-vi /etc/certwarden-deploy/config.yaml
-```
+
+
+`vi /etc/certwarden-deploy/config.yaml`
 ```yaml
 # Base URL of the CertWarden instance
 # required
@@ -77,7 +77,7 @@ I use my own [Forgejo](https://forgejo.org/) Instance [code.lila.network](https:
 * If you have a trivial fix or improvement, go ahead and send a diff to the maintainer(s) of this repository (see
   [MAINTAINERS.md](https://code.lila.network/adoralaura/certwarden-deploy/src/branch/main/MAINTAINERS.md)).
 
-* If you plan to do something more involved, first please [send me a mail]( mailto:dev@lauka.net?subject=%5Bcertwarden-deploy%5D)mso I can create an account for you.
+* If you plan to do something more involved, first please [send me a mail](mailto:dev@lauka.net?subject=%5Bcertwarden-deploy%5D) so I can create an account for you.
 
 ### Non-development Contibutions
 
@@ -90,4 +90,4 @@ share what works.
 You can find the Changelog here: [Changelog](https://code.lila.network/adoralaura/certwarden-deploy/src/branch/main/CHANGELOG.md)
 
 ## License
-`certwarden-deploy` is available under the MIT license. See the [LICENSE](https://code.lila.network/adoralaura/certwarden-deploy/src/branch/main/LICENSE) file for more info.
+`certwarden-deploy` is available under the MIT license. See the [License page](/license/) for more info.
