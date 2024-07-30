@@ -20,7 +20,7 @@ steps:
       - APP_NAME=certwarden-deploy
       - FORGE=https://code.lila.network
     commands:
-      - apk add --update --no-cache xz curl jq make
+      - apk add --update --no-cache xz curl jq make git
       - make build
       - cd bin/
       - mv $APP_NAME $APP_NAME-${GOOS}-${GOARCH}${GOARM}
