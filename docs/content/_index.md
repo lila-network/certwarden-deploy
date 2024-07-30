@@ -17,9 +17,9 @@ Installation of the required CertWarden instance is out of scope of this documen
 To quickly get started with `certwarden-deploy`, just download the binary...
 
 ```shell
-# this downloads certwarden-deploy version 0.2.1
+# this downloads certwarden-deploy version 0.2.2
 # to /usr/local/bin/certwarden-deploy
-sudo wget https://code.lila.network/adoralaura/certwarden-deploy/releases/download/0.2.1/certwarden-deploy-0.2.1-linux-amd64 -O /usr/local/bin/certwarden-deploy
+sudo wget https://code.lila.network/adoralaura/certwarden-deploy/releases/download/0.2.2/certwarden-deploy-linux-amd64 -O /usr/local/bin/certwarden-deploy
 
 sudo chmod +x /usr/local/bin/certwarden-deploy
 ```
