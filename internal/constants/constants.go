@@ -1,7 +1,9 @@
 package constants
 
-const Version = "0.2.1"
+var Version string
+
+var UserAgent = "certwarden-deploy/" + Version + " +https://code.lila.network/adoralaura/certwarden-deploy"
+
 const CertificateApiPath = "/certwarden/api/v1/download/certificates/"
 const KeyApiPath = "/certwarden/api/v1/download/privatekeys/"
 const ApiKeyHeaderName = "X-API-Key"
-const UserAgent = "certwarden-deploy/" + Version + " +https://code.lila.network/adoralaura/certwarden-deploy"

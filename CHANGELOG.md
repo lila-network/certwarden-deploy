@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 ## [Unreleased]
+## [0.2.2] - 2024-07-30
+
+### Changed
+- changed the way the version string is handled internally
+- CI pipeline changed
+- documentation is now more sophisticated and has a new theme
+
+### Added
+- Makefile
+
 ## [0.2.1] - 2024-07-12
 ### Fixed
 - Configuration validation did not work as intended
@@ -40,7 +50,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - some documentation
 
 
-[unreleased]: https://code.lila.network/adoralaura/certwarden-deploy/compare/0.2.1...HEAD
+[unreleased]: https://code.lila.network/adoralaura/certwarden-deploy/compare/0.2.2...HEAD
+[0.2.2]: https://code.lila.network/adoralaura/certwarden-deploy/compare/0.2.1...0.2.2
 [0.2.1]: https://code.lila.network/adoralaura/certwarden-deploy/compare/0.2.0...0.2.1
 [0.2.0]: https://code.lila.network/adoralaura/certwarden-deploy/compare/0.1.1...0.2.0
 [0.1.1]: https://code.lila.network/adoralaura/certwarden-deploy/compare/0.1.0...0.1.1
