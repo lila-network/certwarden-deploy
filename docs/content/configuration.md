@@ -59,7 +59,7 @@ This string defines the file path where the downloaded private key will be saved
 
 `action` (optional):  
 This string specifies a command to run after a certificate is updated or when the --force flag is used during execution.  
-The example uses a systemd reload command for the popular reverse named "caddy".
+The example uses a systemd reload command for the popular reverse proxy named "caddy".
 
 Example Configuration:
 ```yaml
@@ -82,4 +82,4 @@ Use code with caution.
 
 ## Notes
 - This documentation assumes you have a basic understanding of YAML syntax. Resources for learning YAML are readily available online.
-- Replace placeholder values like examplekey_notvalid_hrzjGDDw8z with your actual API keys.
+- Replace placeholder values like `examplekey_notvalid_hrzjGDDw8z` with your actual API keys.
