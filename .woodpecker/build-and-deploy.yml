@@ -20,13 +20,13 @@ steps:
       - APP_NAME=certwarden-deploy
       - FORGE=https://code.lila.network
     commands:
-      - apk add --update --no-cache xz curl jq
-      - go mod download
-      - go build -o output/$APP_NAME-${CI_COMMIT_TAG##v}-${GOOS}-${GOARCH}${GOARM} main.go
-      - cd output
-      - xz --keep --compress $APP_NAME-${CI_COMMIT_TAG##v}-${GOOS}-${GOARCH}${GOARM}
-      - sha256sum $APP_NAME-${CI_COMMIT_TAG##v}-${GOOS}-${GOARCH}${GOARM} >> $APP_NAME-${CI_COMMIT_TAG##v}-${GOOS}-${GOARCH}${GOARM}.sha256
-      - sha256sum $APP_NAME-${CI_COMMIT_TAG##v}-${GOOS}-${GOARCH}${GOARM}.xz >> $APP_NAME-${CI_COMMIT_TAG##v}-${GOOS}-${GOARCH}${GOARM}.xz.sha256
+      - apk add --update --no-cache xz curl jq make
+      - make build
+      - cd bin/
+      - mv $APP_NAME $APP_NAME-${GOOS}-${GOARCH}${GOARM}
+      - xz --keep --compress $APP_NAME-${GOOS}-${GOARCH}${GOARM}
+      - sha256sum $APP_NAME-${GOOS}-${GOARCH}${GOARM} >> $APP_NAME-${GOOS}-${GOARCH}${GOARM}.sha256
+      - sha256sum $APP_NAME-${GOOS}-${GOARCH}${GOARM}.xz >> $APP_NAME-${GOOS}-${GOARCH}${GOARM}.xz.sha256
       - |-
         export RELEASE_ID=`curl --location "$FORGE/api/v1/repos/$CI_REPO/releases?limit=10" \
         --header 'Accept: application/json' -s -S \
@@ -35,23 +35,23 @@ steps:
         curl --location "$FORGE/api/v1/repos/$CI_REPO/releases/$RELEASE_ID/assets" \
         --header "Authorization: token $FORGEJO_APIKEY" \
         --header 'Content-Type: multipart/form-data' -s -S \
-        --form "attachment=@$APP_NAME-${CI_COMMIT_TAG##v}-${GOOS}-${GOARCH}${GOARM};type=application/octet-stream" \
+        --form "attachment=@$APP_NAME-${GOOS}-${GOARCH}${GOARM};type=application/octet-stream" \
         --fail-with-body        
       - |-
         curl --location "$FORGE/api/v1/repos/$CI_REPO/releases/$RELEASE_ID/assets" \
         --header "Authorization: token $FORGEJO_APIKEY" \
         --header 'Content-Type: multipart/form-data' -s -S \
-        --form "attachment=@$APP_NAME-${CI_COMMIT_TAG##v}-${GOOS}-${GOARCH}${GOARM}.xz;type=application/octet-stream" \
+        --form "attachment=@$APP_NAME-${GOOS}-${GOARCH}${GOARM}.xz;type=application/octet-stream" \
         --fail-with-body        
       - |-
         curl --location "$FORGE/api/v1/repos/$CI_REPO/releases/$RELEASE_ID/assets" \
         --header "Authorization: token $FORGEJO_APIKEY" \
         --header 'Content-Type: multipart/form-data' -s -S \
-        --form "attachment=@$APP_NAME-${CI_COMMIT_TAG##v}-${GOOS}-${GOARCH}${GOARM}.sha256;type=application/octet-stream" \
+        --form "attachment=@$APP_NAME-${GOOS}-${GOARCH}${GOARM}.sha256;type=application/octet-stream" \
         --fail-with-body        
       - |-
         curl --location "$FORGE/api/v1/repos/$CI_REPO/releases/$RELEASE_ID/assets" \
         --header "Authorization: token $FORGEJO_APIKEY" \
         --header 'Content-Type: multipart/form-data' -s -S \
-        --form "attachment=@$APP_NAME-${CI_COMMIT_TAG##v}-${GOOS}-${GOARCH}${GOARM}.xz.sha256;type=application/octet-stream" \
+        --form "attachment=@$APP_NAME-${GOOS}-${GOARCH}${GOARM}.xz.sha256;type=application/octet-stream" \
         --fail-with-body        
