@@ -9,7 +9,7 @@
             "type": "go",
             "request": "launch",
             "mode": "auto",
-            "program": "${workspaceFolder}",
+            "program": "${workspaceFolder}/cmd/certwarden-deploy/main.go",
             "args": ["--config", "${workspaceFolder}/config.yaml", "--dry-run"]
         },
         {
@@ -17,7 +17,7 @@
             "type": "go",
             "request": "launch",
             "mode": "auto",
-            "program": "${workspaceFolder}",
+            "program": "${workspaceFolder}/cmd/certwarden-deploy/main.go",
             "args": ["--config", "${workspaceFolder}/config.yaml", "--verbose"]
         }
     ]
