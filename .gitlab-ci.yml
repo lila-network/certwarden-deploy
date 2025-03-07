@@ -20,6 +20,7 @@ build-hugo:
     - apt install ./hugo_extended_${HUGO_VERSION}_linux-amd64.deb
     - rm -f hugo_extended_${HUGO_VERSION}_linux-amd64.deb
   script:
+    - cd docs/
     - hugo --minify --destination ./public
 
 deploy-rsync:
