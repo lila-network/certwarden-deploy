@@ -10,7 +10,7 @@ build-hugo:
   stage: docs-deploy
   artifacts:
     paths:
-      - public/
+      - docs/public/
   variables:
     HUGO_VERSION: 0.128.1
     TZ: Europe/Berlin
@@ -43,4 +43,6 @@ deploy-rsync:
     - chmod 0600 "$HOME/.ssh/id_ed25519"
     - ssh-keyscan -t ed25519 -p "$RSYNC_TARGET_PORT" "$RSYNC_TARGET_SERVER" >> "$HOME/.ssh/known_hosts"
   script:
+    - ls -lah
+    - tree
     - rsync -avh -e "ssh -p $RSYNC_TARGET_PORT" --delete ./public/ "$RSYNC_TARGET_USER@$RSYNC_TARGET_SERVER:$TARGET_PATH"
