@@ -9,6 +9,7 @@
 
 # But not these files...
 !/.gitignore
+!.gitlab-ci.yml
 
 !*.go
 !go.sum
