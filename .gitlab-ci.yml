@@ -1,4 +1,5 @@
 stages:
+  - test
   - docs-deploy
 
 build-hugo:
@@ -44,3 +45,11 @@ deploy-rsync:
     - ssh-keyscan -t ed25519 -p "$RSYNC_TARGET_PORT" "$RSYNC_TARGET_SERVER" >> "$HOME/.ssh/known_hosts"
   script:
     - rsync -avh -e "ssh -p $RSYNC_TARGET_PORT" --delete ./docs/public/ "$RSYNC_TARGET_USER@$RSYNC_TARGET_SERVER:$TARGET_PATH"
+
+test-mr:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
+  stage: test
+  image: docker.io/library/golang:bookworm
+  script:
+    - make test
