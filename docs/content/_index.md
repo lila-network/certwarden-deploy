@@ -13,7 +13,6 @@ So I built `certwarden-deploy`, a dependency-less binary that can run via cronta
 
 Installation of the required CertWarden instance is out of scope of this documentation. For detailed instructions regarding CertWarden, please visit [it's documentation](https://www.certwarden.com/docs/introduction/)
 
-
 To quickly get started with `certwarden-deploy`, just download the binary...
 
 ```shell
@@ -26,8 +25,8 @@ sudo chmod +x /usr/local/bin/certwarden-deploy
 
 ... fill out the config file...
 
-
 `vi /etc/certwarden-deploy/config.yaml`
+
 ```yaml
 # Base URL of the CertWarden instance
 # required
@@ -62,22 +61,27 @@ certificates:
     # required
     key_path: "/path/to/test-certificate.example.com-key.pem"
 
+    # path where to save the ca certificate
+    ca_path: "/path/to/test-ca-cert.pem"
+
     # action to run when certificate was updated or --force is on
     action: "/usr/bin/systemd reload caddy"
 ```
 
 ... and run it!
+
 ```shell
 certwarden-deploy -v
 ```
+
 ## Contributing
 
-I use my own [Forgejo](https://forgejo.org/) Instance [code.lila.network](https://code.lila.network) to manage issues, pull requests and CI/CD.
+I use my own GitLab Instance [code.lila.network](https://gitlab.lila.network) to manage issues, pull requests and CI/CD.
 
 * If you have a trivial fix or improvement, go ahead and send a diff to the maintainer(s) of this repository (see
-  [MAINTAINERS.md](https://code.lila.network/adoralaura/certwarden-deploy/src/branch/main/MAINTAINERS.md)).
+  [MAINTAINERS.md](https://gitlab.lila.network/lila-network/certwarden-deploy/-/blob/main/MAINTAINERS.md)).
 
-* If you plan to do something more involved, first please [send me a mail](mailto:dev@lauka.net?subject=%5Bcertwarden-deploy%5D) so I can create an account for you.
+* If you plan to do something more involved, first please [send me a mail](mailto:adora@lila.network?subject=%5Bcertwarden-deploy%5D) so I can create an account for you.
 
 ### Non-development Contibutions
 
@@ -87,7 +91,9 @@ that works and is not in the repository, please pay it forward and
 share what works.
 
 ## Changelog
-You can find the Changelog here: [Changelog](https://code.lila.network/adoralaura/certwarden-deploy/src/branch/main/CHANGELOG.md)
+
+You can find the Changelog here: [Changelog](https://gitlab.lila.network/lila-network/certwarden-deploy/-/blob/main/CHANGELOG.md)
 
 ## License
+
 `certwarden-deploy` is available under the MIT license. See the [License page](/license/) for more info.

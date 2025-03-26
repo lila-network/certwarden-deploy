@@ -1,5 +1,5 @@
 # certwarden-deploy
-![status-badge](https://ci.lila.network/api/badges/22/status.svg)
+
 [![Please don't upload to GitHub](https://nogithub.codeberg.page/badge.svg)](https://nogithub.codeberg.page)
 
 This is a simple binary to deploy certificates from a [CertWarden](https://www.certwarden.com/) instance.
@@ -8,21 +8,25 @@ This is a simple binary to deploy certificates from a [CertWarden](https://www.c
 
 Installation of the required CertWarden instance is out of scope of this documentation. For detailed instructions regarding CertWarden, please visit [it's documentation](https://www.certwarden.com/docs/introduction/)
 
+Before building the project, ensure you have the following installed:
 
-To quickly get started with `certwarden-deploy`, just download the binary...
+- make: A build automation tool
+- Go: Version 1.22 or later
+
+To build the project, first clone the projects git repository, then navigate to the project's root directory and run the following command:
 
 ```shell
-# this downloads certwarden-deploy version 0.2.2 
-# to /usr/local/bin/certwarden-deploy
-sudo wget https://code.lila.network/adoralaura/certwarden-deploy/releases/download/0.2.2/certwarden-deploy-linux-amd64 -O /usr/local/bin/certwarden-deploy
-
-sudo chmod +x /usr/local/bin/certwarden-deploy
+make build
 ```
 
-... fill out the config file...
+This command will generate the `certwarden-deploy` binary in the `bin/` folder.
+
+Then fill out the config file...
+
 ```shell
 vi /etc/certwarden-deploy/config.yaml
 ```
+
 ```yaml
 # Base URL of the CertWarden instance
 # required
@@ -56,17 +60,19 @@ certificates:
 ```
 
 ... and run it!
+
 ```shell
 certwarden-deploy -v
 ```
+
 ## Contributing
 
-I use my own [Forgejo](https://forgejo.org/) Instance [code.lila.network](https://code.lila.network) to manage issues, pull requests and CI/CD.
+I use my own GitLab Instance [code.lila.network](https://gitlab.lila.network) to manage issues, pull requests and CI/CD.
 
-* If you have a trivial fix or improvement, go ahead and send a diff to the maintainer(s) of this repository (see
-  [MAINTAINERS.md](https://code.lila.network/adoralaura/certwarden-deploy/src/branch/main/MAINTAINERS.md)).
+- If you have a trivial fix or improvement, go ahead and send a diff to the maintainer(s) of this repository (see
+  [MAINTAINERS.md](https://gitlab.lila.network/lila-network/certwarden-deploy/-/blob/main/MAINTAINERS.md)).
 
-* If you plan to do something more involved, first please [send me a mail]( mailto:dev@lauka.net?subject=%5Bcertwarden-deploy%5D)mso I can create an account for you.
+- If you plan to do something more involved, first please [send me a mail](mailto:adora@lila.network?subject=%5Bcertwarden-deploy%5D) so I can create an account for you.
 
 ### Non-development Contibutions
 
@@ -76,7 +82,9 @@ that works and is not in the repository, please pay it forward and
 share what works.
 
 ## Changelog
-You can find the Changelog here: [Changelog](https://code.lila.network/adoralaura/certwarden-deploy/src/branch/main/CHANGELOG.md)
+
+You can find the Changelog here: [Changelog](https://gitlab.lila.network/lila-network/certwarden-deploy/-/blob/main/CHANGELOG.md)
 
 ## License
-`certwarden-deploy` is available under the MIT license. See the [LICENSE](https://code.lila.network/adoralaura/certwarden-deploy/src/branch/main/LICENSE) file for more info.
+
+`certwarden-deploy` is available under the MIT license. See the [LICENSE](https://gitlab.lila.network/lila-network/certwarden-deploy/-/blob/main/LICENSE) file for more info.

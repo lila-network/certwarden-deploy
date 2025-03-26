@@ -1,5 +1,5 @@
 /*
-Copyright © 2024 Laura Kalb <dev@lauka.net>
+Copyright © 2024 Laura Kalb <adora@lila.network>
 The code of this project is available under the MIT license. See the LICENSE file for more info.
 */
 package main
