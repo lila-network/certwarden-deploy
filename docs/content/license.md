@@ -4,15 +4,17 @@ weight: 99
 ---
 
 ## Documentation
+
 This documentation is available under the [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/)
 
 ## Source Code
+
 The source code of `certwarden-deploy` is available under the MIT license:
 
 ```plaintext
 MIT License
 
-Copyright © 2024 Adora Laura Kalb <dev@lauka.net>
+Copyright © 2024 Adora Laura Kalb <adora@lila.network>
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of 
 this software and associated documentation files (the "Software"), to deal in 
