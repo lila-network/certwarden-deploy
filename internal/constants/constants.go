@@ -6,4 +6,5 @@ var UserAgent = "certwarden-deploy/" + Version + " +https://code.lila.network/ad
 
 const CertificateApiPath = "/certwarden/api/v1/download/certificates/"
 const KeyApiPath = "/certwarden/api/v1/download/privatekeys/"
+const CaCertificateApiPath = "/certwarden/api/v1/download/certrootchains/"
 const ApiKeyHeaderName = "X-API-Key"
