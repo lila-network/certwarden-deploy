@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3] - 2025-03-26
+
 ### Changed
 
 - CA Certificates can now be rolled out too (thanks to Arslan 'ArsNotFound' Sakhapov)
@@ -67,9 +69,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Minimal viable application
 - some documentation
 
-[unreleased]: https://code.lila.network/adoralaura/certwarden-deploy/compare/0.2.2...HEAD
-[0.2.2]: https://code.lila.network/adoralaura/certwarden-deploy/compare/0.2.1...0.2.2
-[0.2.1]: https://code.lila.network/adoralaura/certwarden-deploy/compare/0.2.0...0.2.1
-[0.2.0]: https://code.lila.network/adoralaura/certwarden-deploy/compare/0.1.1...0.2.0
-[0.1.1]: https://code.lila.network/adoralaura/certwarden-deploy/compare/0.1.0...0.1.1
-[0.1.0]: https://code.lila.network/adoralaura/certwarden-deploy/releases/tag/0.1.0
+[unreleased]: https://gitlab.lila.network/lila-network/certwarden-deploy/-/compare/0.2.3...HEAD
+[0.2.3]: https://gitlab.lila.network/lila-network/certwarden-deploy/-/compare/0.2.2..0.2.3
+[0.2.2]: https://gitlab.lila.network/lila-network/certwarden-deploy/-/compare/0.2.1..0.2.2
+[0.2.1]: https://gitlab.lila.network/lila-network/certwarden-deploy/-/compare/0.2.0..0.2.1
+[0.2.0]: https://gitlab.lila.network/lila-network/certwarden-deploy/-/compare/0.1.1..0.2.0
+[0.1.1]: https://gitlab.lila.network/lila-network/certwarden-deploy/-/compare/0.1.0..0.1.1
+[0.1.0]: https://gitlab.lila.network/lila-network/certwarden-deploy/-/tree/0.1.0
