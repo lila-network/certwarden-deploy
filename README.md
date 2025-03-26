@@ -67,7 +67,7 @@ certwarden-deploy -v
 
 ## Contributing
 
-I use my own GitLab Instance [code.lila.network](https://gitlab.lila.network) to manage issues, pull requests and CI/CD.
+I use my [own GitLab Instance](https://gitlab.lila.network) to manage issues, pull requests and CI/CD.
 
 - If you have a trivial fix or improvement, go ahead and send a diff to the maintainer(s) of this repository (see
   [MAINTAINERS.md](https://gitlab.lila.network/lila-network/certwarden-deploy/-/blob/main/MAINTAINERS.md)).
