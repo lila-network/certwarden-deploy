@@ -7,6 +7,7 @@ weight: 20
 This document describes how to configure `certwarden-deploy` and which certificates should be managed by it. The configuration file uses the [YAML format](https://yaml.org/) for a human-readable and easy-to-maintain structure.
 
 ## certwarden-deploy CLI Options
+
 ```plaintext
 $ ./certwarden-deploy --help
 certwarden-deploy is a CLI utility to deploy certificates managed by CertWarden.
@@ -57,11 +58,15 @@ This string holds the API key used to fetch the private key data from the CertWa
 `key_path` (required):  
 This string defines the file path where the downloaded private key will be saved.
 
+`ca_path` (optional):  
+This string defines the file path where the downloaded ca chain will be saved.
+
 `action` (optional):  
 This string specifies a command to run after a certificate is updated or when the --force flag is used during execution.  
 The example uses a systemd reload command for the popular reverse proxy named "caddy".
 
 Example Configuration:
+
 ```yaml
 # Base URL of the CertWarden instance
 base_url: "https://certwarden.example.com"
@@ -76,10 +81,26 @@ certificates:
     cert_path: "/path/to/test-certificate.example.com-cert.pem"
     key_secret: examplekey_notvalid_hrzbbDDw8z  # Replace with your actual key
     key_path: "/path/to/test-certificate.example.com-key.pem"
+    ca_path: "/path/to/test-certificate.example.com-ca.pem"
     action: "/usr/bin/systemctl reload caddy"
 ```
+
 Use code with caution.
 
+## Placeholders
+
+You can use placeholders within your `config.yaml` to simplify rollout of the certificate files.
+
+Example: `name: "test"`, `/path/to/{name}.pem` -> `/path/to/test.pem`
+
+The following placeholders are available:
+
+- `{name}`: Gets substituted to the certificate name. Available in the following config keys: `cert_path`, `key_path`, `ca_path`, `action`
+- `{cert_path}`: Gets substituted to the certificate path. Available in the following config keys: `action`
+- `{key_path}`: Gets substituted to the private key path. Available in the following config keys: `action`
+- `{ca_path}`: Gets substituted to the CA Chain path. Available in the following config keys: `action`
+
 ## Notes
+
 - This documentation assumes you have a basic understanding of YAML syntax. Resources for learning YAML are readily available online.
 - Replace placeholder values like `examplekey_notvalid_hrzjGDDw8z` with your actual API keys.

@@ -34,6 +34,7 @@ type CertificateData struct {
 	CertificatePath   string `yaml:"cert_path"`
 	KeySecret         string `yaml:"key_secret"`
 	KeyPath           string `yaml:"key_path"`
+	CaPath            string `yaml:"ca_path"`
 	Action            string `yaml:"action"`
 }
 

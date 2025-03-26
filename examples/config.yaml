@@ -31,6 +31,9 @@ certificates:
     # required
     key_path: "/path/to/test-certificate.example.com-key.pem"
 
+    # path where to save the ca certificate
+    ca_path: "/path/to/test-ca-cert.pem"
+
     # action to run when certificate was updated or --force is on
     action: "/usr/bin/systemd reload caddy"
 

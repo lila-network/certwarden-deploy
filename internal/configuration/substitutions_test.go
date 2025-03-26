@@ -11,7 +11,8 @@ func TestStringSubstitutionWithPlaceholders(t *testing.T) {
 		Name:            "qwer",
 		CertificatePath: "/fake/path/{name}",
 		KeyPath:         "/fake/path/{name}-key",
-		Action:          "./fake action {cert_path} {key_path}",
+		CaPath:          "/fake/path/{name}-ca",
+		Action:          "./fake action {cert_path} {key_path} {ca_path}",
 	}
 
 	cfg := ConfigFileData{
@@ -28,9 +29,13 @@ func TestStringSubstitutionWithPlaceholders(t *testing.T) {
 		t.Fail()
 		t.Logf(`KeyPath = %q, want "/fake/path/qwer-key"`, cfg.Certificates[0].KeyPath)
 	}
-	if cfg.Certificates[0].Action != "./fake action /fake/path/qwer /fake/path/qwer-key" {
+	if cfg.Certificates[0].CaPath != "/fake/path/qwer-ca" {
 		t.Fail()
-		t.Logf(`Action = %q, want "./fake action /fake/path/qwer /fake/path/qwer-key"`, cfg.Certificates[0].Action)
+		t.Logf(`CaPath = %q, want "/fake/path/qwer-ca"`, cfg.Certificates[0].CaPath)
+	}
+	if cfg.Certificates[0].Action != "./fake action /fake/path/qwer /fake/path/qwer-key /fake/path/qwer-ca" {
+		t.Fail()
+		t.Logf(`Action = %q, want "./fake action /fake/path/qwer /fake/path/qwer-key /fake/path/qwer-ca"`, cfg.Certificates[0].Action)
 	}
 }
 
@@ -41,6 +46,7 @@ func TestStringSubstitutionWithoutPlaceholders(t *testing.T) {
 		Name:            "qwer",
 		CertificatePath: "/fake/path/asd",
 		KeyPath:         "/fake/path/asdf-key",
+		CaPath:          "/fake/path/asdf-ca",
 		Action:          "./fake action abcd efgh",
 	}
 
@@ -57,6 +63,10 @@ func TestStringSubstitutionWithoutPlaceholders(t *testing.T) {
 	if cfg.Certificates[0].KeyPath != "/fake/path/asdf-key" {
 		t.Fail()
 		t.Logf(`KeyPath = %q, want "/fake/path/asdf-key"`, cfg.Certificates[0].KeyPath)
+	}
+	if cfg.Certificates[0].CaPath != "/fake/path/asdf-ca" {
+		t.Fail()
+		t.Logf(`CaPath = %q, want "/fake/path/asdf-ca"`, cfg.Certificates[0].CaPath)
 	}
 	if cfg.Certificates[0].Action != "./fake action abcd efgh" {
 		t.Fail()

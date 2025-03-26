@@ -25,14 +25,21 @@ func HandleCertificates(logger *slog.Logger, config *configuration.ConfigFileDat
 			Name:     cert.Name,
 			FilePath: cert.CertificatePath,
 			Secret:   cert.CertificateSecret,
-			IsKey:    false,
+			Type:     CertificateFile,
 		}
 
 		keyInfos := GenericCertificate{
 			Name:     cert.Name,
 			FilePath: cert.KeyPath,
 			Secret:   cert.KeySecret,
-			IsKey:    true,
+			Type:     KeyFile,
+		}
+
+		caInfos := GenericCertificate{
+			Name:     cert.Name,
+			FilePath: cert.CaPath,
+			Secret:   cert.CertificateSecret,
+			Type:     CaCertificateFile,
 		}
 
 		// Rollout Certificate
@@ -55,8 +62,17 @@ func HandleCertificates(logger *slog.Logger, config *configuration.ConfigFileDat
 			continue
 		}
 
+		caOnDiskChanged, err := caInfos.Rollout(logger, config.BaseURL, config.DisableCertificateValidation)
+		if err != nil {
+			logger.Error(
+				"failed to roll out CA", "path",
+				caInfos.FilePath, "name", cert.Name, "error", err,
+			)
+			continue
+		}
+
 		// if cert OR key changed OR --force
-		if (certOnDiskChanged || keyOnDiskChanged) || configuration.Force {
+		if (certOnDiskChanged || keyOnDiskChanged || caOnDiskChanged) || configuration.Force {
 
 			if configuration.Force {
 				logger.Info("Forcing file system change due to --force", "name", cert.Name)
@@ -74,6 +90,11 @@ func HandleCertificates(logger *slog.Logger, config *configuration.ConfigFileDat
 //
 // Returns error on error, true if certificate action needs to be executed, false if not
 func (c *GenericCertificate) Rollout(logger *slog.Logger, baseUrl string, skipInsecure bool) (bool, error) {
+	if c.FilePath == "" {
+		logger.Info("File path is empty, skipping...", "file-type", c.Type)
+		return false, nil
+	}
+
 	err := c.fetchFromServer(
 		logger,
 		baseUrl,
@@ -194,17 +215,20 @@ func (c *GenericCertificate) writeToDisk(logger *slog.Logger) error {
 //
 // Returns error or nil on success.
 func (c *GenericCertificate) fetchFromServer(logger *slog.Logger, baseUrl string, skipInsecure bool) error {
-	var url string
-	var fileType string
-	if c.IsKey {
-		url = baseUrl + constants.KeyApiPath + c.Name
-		fileType = "privatekey"
-	} else {
-		url = baseUrl + constants.CertificateApiPath + c.Name
-		fileType = "certificate"
+	var apiPath string
+
+	switch c.Type {
+	case CertificateFile:
+		apiPath = constants.CertificateApiPath
+	case KeyFile:
+		apiPath = constants.KeyApiPath
+	case CaCertificateFile:
+		apiPath = constants.CaCertificateApiPath
 	}
 
-	logger.Debug("Data request URL: "+url, "file-type", fileType)
+	url := baseUrl + apiPath + c.Name
+
+	logger.Debug("Data request URL: "+url, "file-type", c.Type)
 	var transport http.RoundTripper
 
 	if skipInsecure {
@@ -240,10 +264,10 @@ func (c *GenericCertificate) fetchFromServer(logger *slog.Logger, baseUrl string
 	}(logger)
 
 	if res.StatusCode == http.StatusUnauthorized {
-		logger.Error("API-Key for request is invalid, skipping certificate!", "name", c.Name, "file-type", fileType)
+		logger.Error("API-Key for request is invalid, skipping certificate!", "name", c.Name, "file-type", c.Type)
 		return errors.New("API-Key invalid")
 	} else if res.StatusCode != http.StatusOK {
-		logger.Error("failed to get data from server", "name", c.Name, "http-response", res.Status, "file-type", fileType)
+		logger.Error("failed to get data from server", "name", c.Name, "http-response", res.Status, "file-type", c.Type)
 	}
 
 	bodyBytes, err := io.ReadAll(res.Body)
