@@ -1,0 +1,2 @@
+MD024: false # no-duplicate-heading : Multiple headings with the same content
+MD013: false # line-length : Line length
