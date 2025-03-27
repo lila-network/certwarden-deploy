@@ -3,6 +3,9 @@
     "extends": ["github>renovatebot/.github"],
     "platformAutomerge": false,
     "prCreation": "immediate",
+    "autoApprove": false,
+    "automerge": false,
+    "dependencyDashboardApproval": false,
     "assignees": ["adora"],
     "packageRules": [
       {
