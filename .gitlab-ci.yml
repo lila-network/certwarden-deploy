@@ -15,7 +15,7 @@ build-hugo:
   variables:
     HUGO_VERSION: 0.128.1
     TZ: Europe/Berlin
-  image: docker.io/library/golang:1.24-bookworm
+  image: docker.io/library/golang:1.24-bookworm@sha256:fa1a01d362a7b9df68b021d59a124d28cae6d99ebd1a876e3557c4dd092f1b1d
   before_script:
     - wget https://github.com/gohugoio/hugo/releases/download/v${HUGO_VERSION}/hugo_extended_${HUGO_VERSION}_linux-amd64.deb
     - apt install ./hugo_extended_${HUGO_VERSION}_linux-amd64.deb
@@ -33,7 +33,7 @@ deploy-rsync:
   needs:
     - build-hugo
   stage: docs-deploy
-  image: docker.io/library/alpine:3
+  image: docker.io/library/alpine:3@sha256:a8560b36e8b8210634f77d9f7f9efd7ffa463e380b75e2e74aff4511df3ef88c
   variables:
     TARGET_PATH: /webroot/certwarden-deploy.adora.codes
     RSYNC_TARGET_PORT: 2003
@@ -50,6 +50,6 @@ test-mr:
   rules:
     - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
   stage: test
-  image: docker.io/library/golang:bookworm
+  image: docker.io/library/golang:bookworm@sha256:fa1a01d362a7b9df68b021d59a124d28cae6d99ebd1a876e3557c4dd092f1b1d
   script:
     - make test
