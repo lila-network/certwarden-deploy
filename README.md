@@ -67,7 +67,7 @@ certwarden-deploy -v
 
 ## Contributing
 
-The source code for `certwarden-deploy` is hosted on my own GitLab Instance [gitlab.lila.network](https://gitlab.lila.network) to manage issues, pull requests and CI/CD.
+The source code for `certwarden-deploy` is hosted on my own GitLab Instance [gitlab.lila.network](https://gitlab.lila.network/lila-network/certwarden-deploy) to manage issues, pull requests and CI/CD.
 
 - If you have a trivial fix or improvement, go ahead and send a diff to the maintainer(s) of this repository (see
   [MAINTAINERS.md](https://gitlab.lila.network/lila-network/certwarden-deploy/-/blob/main/MAINTAINERS.md)).
