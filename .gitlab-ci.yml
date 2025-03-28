@@ -33,7 +33,7 @@ deploy-rsync:
   needs:
     - build-hugo
   stage: docs-deploy
-  image: docker.io/library/alpine:3@sha256:a8560b36e8b8210634f77d9f7f9efd7ffa463e380b75e2e74aff4511df3ef88c
+  image: docker.io/library/alpine:20250108@sha256:115729ec5cb049ba6359c3ab005ac742012d92bbaa5b8bc1a878f1e8f62c0cb8
   variables:
     TARGET_PATH: /webroot/certwarden-deploy.adora.codes
     RSYNC_TARGET_PORT: 2003
