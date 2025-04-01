@@ -10,8 +10,9 @@
 # But not these files...
 !/.gitignore
 !.gitlab-ci.yml
+
 !.markdownlint.yaml
-!.gitlab/*
+!renovate.json
 
 !*.go
 !go.sum
