@@ -1,6 +1,6 @@
 module code.lila.network/adoralaura/certwarden-deploy
 
-go 1.22.2
+go 1.24.1
 
 require (
 	github.com/goccy/go-yaml v1.17.1
