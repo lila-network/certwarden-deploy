@@ -13,7 +13,7 @@ clean:
 
 # Run go tests
 test:
-	go test ./...
+	go test -cover ./...
 
 # Set a version for the build
 VERSION := $(shell git describe --tags --always)

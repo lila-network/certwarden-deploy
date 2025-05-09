@@ -7,20 +7,40 @@ import (
 	"github.com/goccy/go-yaml"
 )
 
-func InitializeConfig() (*ConfigFileData, error) {
+type ConfigLoader interface {
+	readDataFromFile() ([]byte, error)
+	unmarshalDataToConfig(data []byte) (ConfigFileData, error)
+}
+
+type FileConfigLoader struct {
+	Path string
+}
+
+// readDataFromFile reads data from file given to FileConfigLoader
+func (f *FileConfigLoader) readDataFromFile() ([]byte, error) {
+	return os.ReadFile(f.Path)
+}
+
+// unmarshalDataToConfig unmarshals []byte to ConfigFileData object.
+func (f *FileConfigLoader) unmarshalDataToConfig(data []byte) (ConfigFileData, error) {
 	var cfg ConfigFileData
-	if ConfigFile == "" {
-		ConfigFile = "/etc/certwarden-deploy/config.yaml"
+
+	err := yaml.Unmarshal(data, &cfg)
+
+	return cfg, err
+}
+
+func GetConfig(loader ConfigLoader) (*ConfigFileData, error) {
+	var cfg ConfigFileData
+
+	data, err := loader.readDataFromFile()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
 
-	data, err := os.ReadFile(ConfigFile)
+	cfg, err = loader.unmarshalDataToConfig(data)
 	if err != nil {
-		return &ConfigFileData{}, fmt.Errorf("failed to read config file: %w", err)
-	}
-
-	err = yaml.Unmarshal(data, &cfg)
-	if err != nil {
-		return &ConfigFileData{}, fmt.Errorf("failed to unmarshal config file: %w", err)
+		return nil, fmt.Errorf("failed to unmarshal config file: %w", err)
 	}
 
 	return &cfg, nil

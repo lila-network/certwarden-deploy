@@ -25,7 +25,10 @@ For more information on how to configure this tool, visit the docs at https://ce
 }
 
 func handleRootCmd(cmd *cobra.Command, args []string) {
-	config, err := configuration.InitializeConfig()
+	cl := configuration.FileConfigLoader{
+		Path: configuration.ConfigFile,
+	}
+	config, err := configuration.GetConfig(&cl)
 	if err != nil {
 		slog.Error("failed to initialize config", "error", err)
 		os.Exit(1)
