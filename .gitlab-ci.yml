@@ -13,7 +13,7 @@ build-hugo:
     paths:
       - docs/public/
   variables:
-    HUGO_VERSION: 0.147.9
+    HUGO_VERSION: 0.128.1
     TZ: Europe/Berlin
   image: docker.io/library/golang:1.24-bookworm@sha256:ee7ff13d239350cc9b962c1bf371a60f3c32ee00eaaf0d0f0489713a87e51a67
   before_script:
