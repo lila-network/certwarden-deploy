@@ -13,7 +13,7 @@ build-hugo:
     paths:
       - docs/public/
   variables:
-    HUGO_VERSION: 0.128.1
+    HUGO_VERSION: 0.147.9
     TZ: Europe/Berlin
   image: docker.io/library/golang:1.24-bookworm@sha256:ee7ff13d239350cc9b962c1bf371a60f3c32ee00eaaf0d0f0489713a87e51a67
   before_script:
@@ -33,10 +33,9 @@ deploy-rsync:
   needs:
     - build-hugo
   stage: docs-deploy
-  image: docker.io/library/alpine:20250108@sha256:115729ec5cb049ba6359c3ab005ac742012d92bbaa5b8bc1a878f1e8f62c0cb8
+  image: docker.io/library/alpine:3.22.0
   variables:
     TARGET_PATH: /webroot/certwarden-deploy.adora.codes
-    RSYNC_TARGET_PORT: 2003
   before_script:
     - apk add --update --no-cache openssh rsync git
     - mkdir -p "$HOME/.ssh"
