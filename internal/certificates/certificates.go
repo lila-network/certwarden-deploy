@@ -268,6 +268,7 @@ func (c *GenericCertificate) fetchFromServer(logger *slog.Logger, baseUrl string
 		return errors.New("API-Key invalid")
 	} else if res.StatusCode != http.StatusOK {
 		logger.Error("failed to get data from server", "name", c.Name, "http-response", res.Status, "file-type", c.Type)
+		return fmt.Errorf("got non-success error code from server: %v", res.Status)
 	}
 
 	bodyBytes, err := io.ReadAll(res.Body)
