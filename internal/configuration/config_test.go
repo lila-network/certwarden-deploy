@@ -27,7 +27,7 @@ func TestReadDataFromFile(t *testing.T) {
 
 	data, err := cl.readDataFromFile()
 
-	if bytes.Compare(data, expectedData) != 0 {
+	if !bytes.Equal(data, expectedData) {
 		t.Errorf("got \"%v\", want \"%v\"", string(data[:]), string(expectedData[:]))
 	}
 }
