@@ -3,7 +3,7 @@ stages:
   - docs-deploy
   - build-deploy
 
-build-hugo:
+docs-build-hugo:
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
       changes: 
@@ -25,7 +25,7 @@ build-hugo:
     - cd docs/
     - hugo --minify --destination ./public
 
-deploy-rsync:
+docs-deploy-rsync:
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
       changes: 
