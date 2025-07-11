@@ -19,6 +19,7 @@
 !go.mod
 
 !examples/*
+!helper_scripts/*
 
 !*.md
 !LICENSE
