@@ -34,7 +34,7 @@ docs-deploy-rsync:
   needs:
     - docs-build-hugo
   stage: docs-deploy
-  image: docker.io/library/alpine:3.22.0
+  image: docker.io/library/alpine:3.22.1
   variables:
     TARGET_PATH: /webroot/certwarden-deploy.adora.codes
   before_script:
