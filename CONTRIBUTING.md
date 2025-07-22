@@ -1,6 +1,6 @@
 # Contributing
 
-I use my own [Forgejo Instance](https://code.lila.network) to manage issues and pull requests.
+I use my own [GitLab Instance](https://gitlab.lila.network/lila-network/certwarden-deploy) to manage issues and pull requests.
 
 * If you have a trivial fix or improvement, go ahead and create a pull request,
   addressing (with `@...`) the maintainer of this repository (see

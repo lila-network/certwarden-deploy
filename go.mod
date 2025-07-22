@@ -1,4 +1,4 @@
-module code.lila.network/adoralaura/certwarden-deploy
+module gitlab.lila.network/lila-network/certwarden-deploy
 
 go 1.24.4
 

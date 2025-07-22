@@ -14,7 +14,7 @@ uniqueHomePage = false # change to false to add sidebar to homepage
 [params]
   disableLandingPageButton = false
   disableLanguageSwitchingButton = false
-  editURL = "https://code.lila.network/adoralaura/certwarden-deploy/_edit/main/docs/content/${FilePath}"
+  editURL = "https://gitlab.lila.network/lila-network/certwarden-deploy/-/tree/main/${FilePath}"
   externalLinkTarget = "_blank"
   headingPre = '<script defer src="https://esseles.adora.codes/script.js" data-website-id="fe4ec517-25b2-4e0d-b502-6bd3a7420849"></script>'
   disableExplicitIndexURLs = true
@@ -28,19 +28,14 @@ uniqueHomePage = false # change to false to add sidebar to homepage
 [menu]
   [[menu.shortcuts]]
     identifier = 'ds'
-    name = "<i class='fa-fw fas fa-code-branch'></i> certwarden-deploy Git Repository"
-    url = 'https://code.lila.network/adoralaura/certwarden-deploy'
+    name = "<i class='fa-fw fas fa-code-branch'></i> certwarden-deploy GitLab Repository"
+    url = 'https://gitlab.lila.network/lila-network/certwarden-deploy'
     weight = 10
-
-  [[menu.shortcuts]]
-    name = "<i class='fa-fw fas fa-arrow-up-right-from-square'></i> CertWarden GitHub"
-    url = 'showcase/'
-    weight = 11
 
   [[menu.shortcuts]]
     identifier = 'hugodoc'
     name = "<i class='fa-fw fas fa-arrow-up-right-from-square'></i> CertWarden Website"
-    url = 'https://gohugo.io/'
+    url = 'https://certwarden-deploy.adora.codes/'
     weight = 20
 
 #  [[menu.shortcuts]]

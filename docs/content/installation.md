@@ -3,14 +3,18 @@ title: Installation
 weight: 10
 ---
 
-## Prerequisites
+## Getting pre-built Binaries
+You can also get pre-built binaries from the [download page](https://static-cdn.lila.network/releases/certwarden-deploy/). Make sure you get the binaries fitting your architecture!
+
+## Building the Project from Source
+### Prerequisites
 
 Before building the project, ensure you have the following installed:
 
 - make: A build automation tool
 - Go: Version 1.24 or later
 
-## Building the Project from Source
+### Compiling
 
 To build the project, first clone the projects git repository, then navigate to the project's root directory and run the following command:
 

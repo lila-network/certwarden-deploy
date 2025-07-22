@@ -5,7 +5,7 @@ import (
 	"os"
 	"strconv"
 
-	"code.lila.network/adoralaura/certwarden-deploy/internal/configuration"
+	"gitlab.lila.network/lila-network/certwarden-deploy/internal/configuration"
 )
 
 // Initialize initializes a *slog.Logger with the right log level and options.

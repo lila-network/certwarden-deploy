@@ -1,5 +1,5 @@
 # Set the default Go build flags
-GOFLAGS = -ldflags='-w -s -X code.lila.network/adoralaura/certwarden-deploy/internal/constants.Version=$(VERSION)'
+GOFLAGS = -ldflags='-w -s -X gitlab.lila.network/lila-network/certwarden-deploy/internal/constants.Version=$(VERSION)'
 
 .PHONY: test
 

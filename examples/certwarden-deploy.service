@@ -1,6 +1,6 @@
 [Unit]
 Description=CertWarden Deployer binary
-Documentation=https://code.lila.network/adoralaura/certwarden-deploy
+Documentation=https://gitlab.lila.network/lila-network/certwarden-deploy
 
 [Service]
 # uncomment if you want to use a different user than root

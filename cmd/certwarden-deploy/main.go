@@ -7,8 +7,8 @@ package main
 import (
 	"os"
 
-	"code.lila.network/adoralaura/certwarden-deploy/internal/cli"
-	"code.lila.network/adoralaura/certwarden-deploy/internal/configuration"
+	"gitlab.lila.network/lila-network/certwarden-deploy/internal/cli"
+	"gitlab.lila.network/lila-network/certwarden-deploy/internal/configuration"
 )
 
 func main() {

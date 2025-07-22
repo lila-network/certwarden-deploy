@@ -16,9 +16,9 @@ Installation of the required CertWarden instance is out of scope of this documen
 To quickly get started with `certwarden-deploy`, just download the binary...
 
 ```shell
-# this downloads certwarden-deploy version 0.2.2
+# this downloads certwarden-deploy version 0.2.4 for your arch, see uname -m
 # to /usr/local/bin/certwarden-deploy
-sudo wget https://code.lila.network/adoralaura/certwarden-deploy/releases/download/0.2.2/certwarden-deploy-linux-amd64 -O /usr/local/bin/certwarden-deploy
+sudo wget https://static-cdn.lila.network/releases/certwarden-deploy/0.2.4/linux/$(uname -m)/certwarden-deploy -O /usr/local/bin/certwarden-deploy
 
 sudo chmod +x /usr/local/bin/certwarden-deploy
 ```
@@ -76,7 +76,7 @@ certwarden-deploy -v
 
 ## Contributing
 
-I use my own GitLab Instance [code.lila.network](https://gitlab.lila.network) to manage issues, pull requests and CI/CD.
+I use my own GitLab Instance [gitlab.lila.network](https://gitlab.lila.network/lila-network/certwarden-deploy) to manage issues, pull requests and CI/CD.
 
 * If you have a trivial fix or improvement, go ahead and send a diff to the maintainer(s) of this repository (see
   [MAINTAINERS.md](https://gitlab.lila.network/lila-network/certwarden-deploy/-/blob/main/MAINTAINERS.md)).
