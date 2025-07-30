@@ -19,28 +19,68 @@ import (
 	"gitlab.lila.network/lila-network/certwarden-deploy/internal/constants"
 )
 
-func HandleCertificates(logger *slog.Logger, config *configuration.ConfigFileData) {
-	for _, cert := range config.Certificates {
-		certInfos := GenericCertificate{
+// CertificateManager is a manager instance that holds commonly
+// used things like logger and config
+type CertificateManager struct {
+	logger          *slog.Logger
+	config          *configuration.ConfigFileData
+	certificateList *[]Certificate
+}
+
+// NewCertificateManager returns a new *CertificateManager
+func NewCertificateManager(
+	logger *slog.Logger,
+	config *configuration.ConfigFileData,
+) *CertificateManager {
+	return &CertificateManager{
+		config: config,
+		logger: logger,
+	}
+}
+
+// GetCertificatesFromConfig creates new Certificate objects from the given
+// config values
+func (cm *CertificateManager) GetCertificatesFromConfig() *[]Certificate {
+	certList := []Certificate{}
+
+	for _, cert := range cm.config.Certificates {
+		certInfos := &CertificateData{
 			Name:     cert.Name,
 			FilePath: cert.CertificatePath,
 			Secret:   cert.CertificateSecret,
 			Type:     CertificateFile,
 		}
 
-		keyInfos := GenericCertificate{
+		keyInfos := &CertificateData{
 			Name:     cert.Name,
 			FilePath: cert.KeyPath,
 			Secret:   cert.KeySecret,
 			Type:     KeyFile,
 		}
 
-		caInfos := GenericCertificate{
+		caInfos := &CertificateData{
 			Name:     cert.Name,
 			FilePath: cert.CaPath,
 			Secret:   cert.CertificateSecret,
 			Type:     CaCertificateFile,
 		}
+
+		certList = append(
+			certList,
+			Certificate{
+				Certificate:          certInfos,
+				Key:                  keyInfos,
+				CertificateAuthority: caInfos,
+				RolloutAction:        cert.Action,
+			},
+		)
+	}
+
+	return &certList
+}
+
+func (cm *CertificateManager) HandleCertificates(certs *[]Certificate) {
+	for _, cert := range config.Certificates {
 
 		// Rollout Certificate
 		certOnDiskChanged, err := certInfos.Rollout(logger, config.BaseURL, config.DisableCertificateValidation)
@@ -89,7 +129,7 @@ func HandleCertificates(logger *slog.Logger, config *configuration.ConfigFileDat
 // server and writing it to disk if the data differs.
 //
 // Returns error on error, true if certificate action needs to be executed, false if not
-func (c *GenericCertificate) Rollout(logger *slog.Logger, baseUrl string, skipInsecure bool) (bool, error) {
+func (c *CertificateData) Rollout(logger *slog.Logger, baseUrl string, skipInsecure bool) (bool, error) {
 	if c.FilePath == "" {
 		logger.Info("File path is empty, skipping...", "file-type", c.Type)
 		return false, nil
@@ -135,7 +175,7 @@ func (c *GenericCertificate) Rollout(logger *slog.Logger, baseUrl string, skipIn
 // readFromDisk reads file data from disk and populates the data []byte field.
 //
 // Returns error or nil on success
-func (c *GenericCertificate) readFromDisk() error {
+func (c *CertificateData) readFromDisk() error {
 	filebytes, err := os.ReadFile(c.FilePath)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -152,7 +192,7 @@ func (c *GenericCertificate) readFromDisk() error {
 // needsRollout checks the data []bytes against the data on disk.
 //
 // Returns true if file needs rollout, false if not
-func (c *GenericCertificate) needsRollout(logger *slog.Logger) (bool, error) {
+func (c *CertificateData) needsRollout(logger *slog.Logger) (bool, error) {
 	err := c.readFromDisk()
 
 	if err != nil {
@@ -179,7 +219,7 @@ func (c *GenericCertificate) needsRollout(logger *slog.Logger) (bool, error) {
 // writeToDisk flushes the certificate data to disk.
 //
 // Returns error or nil on success.
-func (c *GenericCertificate) writeToDisk(logger *slog.Logger) error {
+func (c *CertificateData) writeToDisk(logger *slog.Logger) error {
 	if configuration.DryRun {
 		logger.Debug("DRY-RUN: writing data to file", "path", c.FilePath)
 		return nil
@@ -214,7 +254,7 @@ func (c *GenericCertificate) writeToDisk(logger *slog.Logger) error {
 // fills the serverBytes field.
 //
 // Returns error or nil on success.
-func (c *GenericCertificate) fetchFromServer(logger *slog.Logger, baseUrl string, skipInsecure bool) error {
+func (c *CertificateData) fetchFromServer(logger *slog.Logger, baseUrl string, skipInsecure bool) error {
 	var apiPath string
 
 	switch c.Type {
