@@ -17,6 +17,7 @@ import (
 
 	"gitlab.lila.network/lila-network/certwarden-deploy/internal/configuration"
 	"gitlab.lila.network/lila-network/certwarden-deploy/internal/constants"
+	"gorm.io/gorm/logger"
 )
 
 // CertificateManager is a manager instance that holds commonly
@@ -25,6 +26,7 @@ type CertificateManager struct {
 	logger          *slog.Logger
 	config          *configuration.ConfigFileData
 	certificateList *[]Certificate
+	httpclient      configuration.HTTPClient
 }
 
 // NewCertificateManager returns a new *CertificateManager
@@ -35,6 +37,14 @@ func NewCertificateManager(
 	return &CertificateManager{
 		config: config,
 		logger: logger,
+		httpclient: &http.Client{
+			Timeout: 10 * time.Second,
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{
+					InsecureSkipVerify: config.DisableCertificateValidation,
+				},
+			},
+		},
 	}
 }
 
@@ -80,10 +90,17 @@ func (cm *CertificateManager) GetCertificatesFromConfig() *[]Certificate {
 }
 
 func (cm *CertificateManager) HandleCertificates(certs *[]Certificate) {
-	for _, cert := range config.Certificates {
+	certificates := cm.GetCertificatesFromConfig()
+
+	if len(*certificates) == 0 {
+		cm.logger.Info("list of certificates is empty, nothing to do. Exiting...")
+		return
+	}
+
+	for _, cert := range *certificates {
 
 		// Rollout Certificate
-		certOnDiskChanged, err := certInfos.Rollout(logger, config.BaseURL, config.DisableCertificateValidation)
+		certOnDiskChanged, err := cert.Rollout(logger, config.BaseURL, config.DisableCertificateValidation)
 		if err != nil {
 			logger.Error(
 				"Failed to roll out Certificate", "path",
@@ -129,7 +146,7 @@ func (cm *CertificateManager) HandleCertificates(certs *[]Certificate) {
 // server and writing it to disk if the data differs.
 //
 // Returns error on error, true if certificate action needs to be executed, false if not
-func (c *CertificateData) Rollout(logger *slog.Logger, baseUrl string, skipInsecure bool) (bool, error) {
+func (cm *CertificateManager) RolloutCertificateData(c *CertificateData) (bool, error) {
 	if c.FilePath == "" {
 		logger.Info("File path is empty, skipping...", "file-type", c.Type)
 		return false, nil
@@ -254,7 +271,7 @@ func (c *CertificateData) writeToDisk(logger *slog.Logger) error {
 // fills the serverBytes field.
 //
 // Returns error or nil on success.
-func (c *CertificateData) fetchFromServer(logger *slog.Logger, baseUrl string, skipInsecure bool) error {
+func (cm *CertificateManager) fetchDataFromServer(c *CertificateData) error {
 	var apiPath string
 
 	switch c.Type {
@@ -266,24 +283,10 @@ func (c *CertificateData) fetchFromServer(logger *slog.Logger, baseUrl string, s
 		apiPath = constants.CaCertificateApiPath
 	}
 
-	url := baseUrl + apiPath + c.Name
+	url := cm.config.BaseURL + apiPath + c.Name
 
-	logger.Debug("Data request URL: "+url, "file-type", c.Type)
-	var transport http.RoundTripper
+	cm.logger.Debug("Data request URL: "+url, "file-type", c.Type)
 
-	if skipInsecure {
-		logger.Debug("Upstream Server TLS Certificate Validation is disabled")
-		transport = &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		}
-	} else {
-		logger.Debug("Upstream Server HTTP TLS Certificate Validation is enabled")
-	}
-
-	client := &http.Client{
-		Timeout:   10 * time.Second,
-		Transport: transport,
-	}
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return fmt.Errorf("failed to prepare to request data from server: %w", err)
@@ -292,7 +295,7 @@ func (c *CertificateData) fetchFromServer(logger *slog.Logger, baseUrl string, s
 	req.Header.Set("User-Agent", constants.UserAgent)
 	req.Header.Add(constants.ApiKeyHeaderName, c.Secret)
 
-	res, err := client.Do(req)
+	res, err := cm.httpclient.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to request data from server: %w", err)
 	}
@@ -301,13 +304,13 @@ func (c *CertificateData) fetchFromServer(logger *slog.Logger, baseUrl string, s
 		if err := res.Body.Close(); err != nil {
 			l.Error("failed to close http response body", "error", err)
 		}
-	}(logger)
+	}(cm.logger)
 
 	if res.StatusCode == http.StatusUnauthorized {
-		logger.Error("API-Key for request is invalid, skipping certificate!", "name", c.Name, "file-type", c.Type)
+		cm.logger.Error("API-Key for request is invalid, skipping certificate!", "name", c.Name, "file-type", c.Type)
 		return errors.New("API-Key invalid")
 	} else if res.StatusCode != http.StatusOK {
-		logger.Error("failed to get data from server", "name", c.Name, "http-response", res.Status, "file-type", c.Type)
+		cm.logger.Error("failed to get data from server", "name", c.Name, "http-response", res.Status, "file-type", c.Type)
 		return fmt.Errorf("got non-success error code from server: %v", res.Status)
 	}
 
