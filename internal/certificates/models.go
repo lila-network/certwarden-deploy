@@ -27,6 +27,7 @@ type Certificate struct {
 	Key                  *CertificateData
 	CertificateAuthority *CertificateData
 	RolloutAction        string
+	NeedsAction          bool
 }
 
 // CertificateData is a generic container to enable us to

@@ -2,6 +2,7 @@ package certificates
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/sha256"
 	"crypto/tls"
 	"errors"
@@ -17,7 +18,6 @@ import (
 
 	"gitlab.lila.network/lila-network/certwarden-deploy/internal/configuration"
 	"gitlab.lila.network/lila-network/certwarden-deploy/internal/constants"
-	"gorm.io/gorm/logger"
 )
 
 // CertificateManager is a manager instance that holds commonly
@@ -82,6 +82,7 @@ func (cm *CertificateManager) GetCertificatesFromConfig() *[]Certificate {
 				Key:                  keyInfos,
 				CertificateAuthority: caInfos,
 				RolloutAction:        cert.Action,
+				NeedsAction:          false,
 			},
 		)
 	}
@@ -89,8 +90,7 @@ func (cm *CertificateManager) GetCertificatesFromConfig() *[]Certificate {
 	return &certList
 }
 
-func (cm *CertificateManager) HandleCertificates(certs *[]Certificate) {
-	certificates := cm.GetCertificatesFromConfig()
+func (cm *CertificateManager) HandleCertificates(certificates *[]Certificate) {
 
 	if len(*certificates) == 0 {
 		cm.logger.Info("list of certificates is empty, nothing to do. Exiting...")
@@ -98,46 +98,69 @@ func (cm *CertificateManager) HandleCertificates(certs *[]Certificate) {
 	}
 
 	for _, cert := range *certificates {
+		fsFailed := false
 
 		// Rollout Certificate
-		certOnDiskChanged, err := cert.Rollout(logger, config.BaseURL, config.DisableCertificateValidation)
+		certOnDiskChanged, err := cm.RolloutCertificateData(cert.Certificate)
 		if err != nil {
-			logger.Error(
+			fsFailed = true
+			cm.logger.Error(
 				"Failed to roll out Certificate", "path",
-				certInfos.FilePath, "name", cert.Name, "error", err,
+				cert.Certificate.FilePath, "name", cert.Certificate.Name, "error", err,
 			)
 			continue
 		}
+		if certOnDiskChanged {
+			cm.logger.Debug("Certificate file changed on disk", "name", cert.Certificate.Name)
+			cert.NeedsAction = true
+		}
 
-		// Rollout Key
-		keyOnDiskChanged, err := keyInfos.Rollout(logger, config.BaseURL, config.DisableCertificateValidation)
+		// Rollout key
+		keyOnDiskChanged, err := cm.RolloutCertificateData(cert.Key)
 		if err != nil {
-			logger.Error(
+			fsFailed = true
+			cm.logger.Error(
 				"Failed to roll out Key", "path",
-				keyInfos.FilePath, "name", cert.Name, "error", err,
+				cert.Key.FilePath, "name", cert.Key.Name, "error", err,
 			)
 			continue
 		}
 
-		caOnDiskChanged, err := caInfos.Rollout(logger, config.BaseURL, config.DisableCertificateValidation)
+		if keyOnDiskChanged {
+			cm.logger.Debug("Key file changed on disk", "name", cert.Certificate.Name)
+			cert.NeedsAction = true
+		}
+
+		// Rollout CA
+		caOnDiskChanged, err := cm.RolloutCertificateData(cert.CertificateAuthority)
 		if err != nil {
-			logger.Error(
-				"failed to roll out CA", "path",
-				caInfos.FilePath, "name", cert.Name, "error", err,
+			fsFailed = true
+			cm.logger.Error(
+				"Failed to roll out CertificateAuthority", "path",
+				cert.CertificateAuthority.FilePath, "name", cert.CertificateAuthority.Name, "error", err,
 			)
 			continue
 		}
 
-		// if cert OR key changed OR --force
-		if (certOnDiskChanged || keyOnDiskChanged || caOnDiskChanged) || configuration.Force {
+		if caOnDiskChanged {
+			cm.logger.Debug("CA file changed on disk", "name", cert.Certificate.Name)
+			cert.NeedsAction = true
+		}
 
-			if configuration.Force {
-				logger.Info("Forcing file system change due to --force", "name", cert.Name)
-			}
-			err = handleCertificateAction(cert.Action)
-			if err != nil {
-				logger.Error("Failed to execute post-rollout action", "name", cert.Name, "error", err)
-			}
+		if configuration.Force && !fsFailed {
+			cm.logger.Info("Forcing file system change due to --force", "name", cert.Certificate.Name)
+			cert.NeedsAction = true
+		}
+
+		if fsFailed {
+			cm.logger.Info("One or more errors occured during file system operations, skipping certificate action.", "name", cert.Certificate.Name)
+			cert.NeedsAction = false
+		}
+	}
+
+	for _, cert := range *certificates {
+		if cert.NeedsAction {
+			cm.handleCertificateAction(&cert)
 		}
 	}
 }
@@ -148,43 +171,39 @@ func (cm *CertificateManager) HandleCertificates(certs *[]Certificate) {
 // Returns error on error, true if certificate action needs to be executed, false if not
 func (cm *CertificateManager) RolloutCertificateData(c *CertificateData) (bool, error) {
 	if c.FilePath == "" {
-		logger.Info("File path is empty, skipping...", "file-type", c.Type)
+		cm.logger.Info("File path is empty, skipping...", "file-type", c.Type)
 		return false, nil
 	}
 
-	err := c.fetchFromServer(
-		logger,
-		baseUrl,
-		skipInsecure,
-	)
+	err := cm.fetchDataFromServer(c)
 	if err != nil {
 		return false, fmt.Errorf("failed to get certificate from server: %w", err)
 	}
 
-	fileNeedsRollout, err := c.needsRollout(logger)
+	fileNeedsRollout, err := cm.needsRollout(c)
 	if err != nil {
 		return false, fmt.Errorf("failed to check certificate on disk: %w", err)
 	}
 
 	if fileNeedsRollout || configuration.Force {
 		if configuration.Force {
-			logger.Info("Forcing file system change due to --force", "name", c.Name)
+			cm.logger.Info("Forcing file system change due to --force", "name", c.Name)
 		}
 
-		err = c.writeToDisk(logger)
+		err = cm.writeToDisk(c)
 		if err != nil {
 			return false, fmt.Errorf("failed to handle certificate: %w", err)
 		}
 
 	}
 	if fileNeedsRollout {
-		logger.Info("New file deployed", "path", c.FilePath)
+		cm.logger.Info("New file deployed", "path", c.FilePath)
 		return true, nil
 	} else if configuration.Force {
-		logger.Info("File deployed", "path", c.FilePath)
+		cm.logger.Info("File deployed", "path", c.FilePath)
 		return true, nil
 	} else {
-		logger.Info("File not changed, skipping...", "path", c.FilePath)
+		cm.logger.Info("File not changed, skipping...", "path", c.FilePath)
 		return false, nil
 	}
 }
@@ -209,7 +228,7 @@ func (c *CertificateData) readFromDisk() error {
 // needsRollout checks the data []bytes against the data on disk.
 //
 // Returns true if file needs rollout, false if not
-func (c *CertificateData) needsRollout(logger *slog.Logger) (bool, error) {
+func (cm *CertificateManager) needsRollout(c *CertificateData) (bool, error) {
 	err := c.readFromDisk()
 
 	if err != nil {
@@ -225,9 +244,9 @@ func (c *CertificateData) needsRollout(logger *slog.Logger) (bool, error) {
 
 	hashesAreDifferent := diskHash != serverHash
 	if hashesAreDifferent {
-		logger.Debug("File on disk differs from server source", "path", c.FilePath)
+		cm.logger.Debug("File on disk differs from server source", "path", c.FilePath)
 	} else {
-		logger.Debug("File on disk is identical to server source", "path", c.FilePath)
+		cm.logger.Debug("File on disk is identical to server source", "path", c.FilePath)
 	}
 
 	return hashesAreDifferent, nil
@@ -236,9 +255,9 @@ func (c *CertificateData) needsRollout(logger *slog.Logger) (bool, error) {
 // writeToDisk flushes the certificate data to disk.
 //
 // Returns error or nil on success.
-func (c *CertificateData) writeToDisk(logger *slog.Logger) error {
+func (cm *CertificateManager) writeToDisk(c *CertificateData) error {
 	if configuration.DryRun {
-		logger.Debug("DRY-RUN: writing data to file", "path", c.FilePath)
+		cm.logger.Debug("DRY-RUN: writing data to file", "path", c.FilePath)
 		return nil
 	}
 
@@ -251,7 +270,7 @@ func (c *CertificateData) writeToDisk(logger *slog.Logger) error {
 		if err := file.Close(); err != nil {
 			l.Error("failed to close file", "path", c.FilePath, "error", err)
 		}
-	}(logger)
+	}(cm.logger)
 
 	w := bufio.NewWriter(file)
 
@@ -263,7 +282,7 @@ func (c *CertificateData) writeToDisk(logger *slog.Logger) error {
 		return fmt.Errorf("failed to flush data to file: %w", err)
 	}
 
-	logger.Debug("Successfully wrote to file", "path", c.FilePath)
+	cm.logger.Debug("Successfully wrote to file", "path", c.FilePath)
 	return nil
 }
 
@@ -324,14 +343,24 @@ func (cm *CertificateManager) fetchDataFromServer(c *CertificateData) error {
 }
 
 // handleCertificateAction executes the user-defined action after successful certificate deployment
-func handleCertificateAction(action string) error {
-	if action == "" {
+func (cm *CertificateManager) handleCertificateAction(c *Certificate) error {
+	if c.RolloutAction == "" {
 		return nil
 	}
 
-	sargs := strings.Split(action, " ")
+	sargs := strings.Split(c.RolloutAction, " ")
 
 	cmd := exec.Command(sargs[0], sargs[1:]...)
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+
 	err := cmd.Run()
-	return err
+	if err != nil {
+		cm.logger.Error("Failed to handle certificate action", "name", c.Certificate.Name)
+		cm.logger.Error("STDERR: " + stderr.String())
+		cm.logger.Error("STDOUT: " + stdout.String())
+	}
+	return fmt.Errorf("failed to handle certificate action for certificate %v, : %w", c.Certificate.Name, err)
 }
