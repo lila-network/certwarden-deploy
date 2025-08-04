@@ -97,7 +97,8 @@ func (cm *CertificateManager) HandleCertificates(certificates *[]Certificate) {
 		return
 	}
 
-	for _, cert := range *certificates {
+	for i := range *certificates {
+		cert := &(*certificates)[i]
 		fsFailed := false
 
 		// Rollout Certificate
@@ -155,12 +156,6 @@ func (cm *CertificateManager) HandleCertificates(certificates *[]Certificate) {
 		if fsFailed {
 			cm.logger.Info("One or more errors occured during file system operations, skipping certificate action.", "name", cert.Certificate.Name)
 			cert.NeedsAction = false
-		}
-	}
-
-	for _, cert := range *certificates {
-		if cert.NeedsAction {
-			cm.handleCertificateAction(&cert)
 		}
 	}
 }
@@ -343,12 +338,14 @@ func (cm *CertificateManager) fetchDataFromServer(c *CertificateData) error {
 }
 
 // handleCertificateAction executes the user-defined action after successful certificate deployment
-func (cm *CertificateManager) handleCertificateAction(c *Certificate) error {
-	if c.RolloutAction == "" {
-		return nil
+//
+// Returns error or nil, StdOut as string, and StdErr as string
+func (cm *CertificateManager) handleSingleCertificateAction(action string) (error, string, string) {
+	if action == "" {
+		return nil, "", ""
 	}
 
-	sargs := strings.Split(c.RolloutAction, " ")
+	sargs := strings.Split(action, " ")
 
 	cmd := exec.Command(sargs[0], sargs[1:]...)
 	stdout := new(bytes.Buffer)
@@ -358,9 +355,33 @@ func (cm *CertificateManager) handleCertificateAction(c *Certificate) error {
 
 	err := cmd.Run()
 	if err != nil {
-		cm.logger.Error("Failed to handle certificate action", "name", c.Certificate.Name)
-		cm.logger.Error("STDERR: " + stderr.String())
-		cm.logger.Error("STDOUT: " + stdout.String())
+		return fmt.Errorf("command was not successful: %q, : %w", action, err), stdout.String(), stderr.String()
 	}
-	return fmt.Errorf("failed to handle certificate action for certificate %v, : %w", c.Certificate.Name, err)
+
+	return nil, "", ""
+}
+
+// HandleCertificateActions takes a list of Certificates and manages the rollout action
+func (cm *CertificateManager) HandleCertificateActions(certificates *[]Certificate) error {
+	actionMap := make(map[string][]Certificate)
+
+	for i := range *certificates {
+
+		cert := &(*certificates)[i]
+
+		if cert.NeedsAction {
+			actionMap[cert.RolloutAction] = append(actionMap[cert.RolloutAction], *cert)
+		}
+	}
+
+	for action, actionCertificates := range actionMap {
+
+	}
+
+	err, stdout, stderr := cm.handleSingleCertificateAction(cert.RolloutAction)
+	if err != nil {
+		cm.logger.Error(
+			"An error occured during rollout action",
+			"error", err, "stdout")
+	}
 }
