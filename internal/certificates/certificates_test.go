@@ -16,7 +16,7 @@ import (
 
 func TestFetchDataFromServer_Success(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		expectedPath := constants.CertificateApiPath + "mycert"
+		expectedPath := constants.CertificateApiPath + "testCert"
 		if r.URL.Path != expectedPath {
 			t.Errorf("expected path %q, got %q", expectedPath, r.URL.Path)
 		}
