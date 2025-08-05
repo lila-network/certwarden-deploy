@@ -41,8 +41,8 @@ type CertificateData struct {
 	Type FileType
 
 	// Bytes fetched from the server
-	serverBytes []byte
+	ServerBytes []byte
 
 	// Bytes fetched from disk
-	diskBytes []byte
+	DiskBytes []byte
 }

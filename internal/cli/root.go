@@ -48,4 +48,6 @@ func handleRootCmd(cmd *cobra.Command, args []string) {
 	certs := cm.GetCertificatesFromConfig()
 
 	cm.HandleCertificates(certs)
+
+	cm.HandleCertificateActions(certs)
 }

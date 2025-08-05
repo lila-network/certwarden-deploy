@@ -2,9 +2,6 @@ package configuration
 
 import "log/slog"
 
-// Config file gets read into here
-var Config *ConfigFileData
-
 // ConfigFile contains the path to the config file on disk
 var ConfigFile string
 
