@@ -51,8 +51,9 @@ test-mr:
     - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
   stage: test
   image: docker.io/library/golang:1.24-bookworm@sha256:ef8c5c733079ac219c77edab604c425d748c740d8699530ea6aced9de79aea40
+  coverage: /total:\s+\(statements\)\s+\d+.\d+%/
   script:
-    - make test
+    - make coverage
 
 build-deploy:
   image: docker.io/library/golang:1.24-bookworm@sha256:ef8c5c733079ac219c77edab604c425d748c740d8699530ea6aced9de79aea40
