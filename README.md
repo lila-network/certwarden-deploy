@@ -1,6 +1,10 @@
 # certwarden-deploy
 
 [![Please don't upload to GitHub](https://nogithub.codeberg.page/badge.svg)](https://nogithub.codeberg.page)
+![coverage](https://gitlab.lila.network/lila-network/certwarden-deploy/badges/main/coverage.svg)
+[![latest release](https://gitlab.lila.network/lila-network/certwarden-deploy/-/badges/release.svg)](https://gitlab.lila.network/lila-network/certwarden-deploy/-/releases/permalink/latest)
+[![MIT License](https://img.shields.io/badge/License-MIT-blue)](https://gitlab.lila.network/lila-network/certwarden-deploy/-/blob/main/LICENSE?ref_type=heads)
+
 
 This is a simple binary to deploy certificates from a [CertWarden](https://www.certwarden.com/) instance.
 
