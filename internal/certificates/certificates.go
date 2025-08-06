@@ -175,7 +175,7 @@ func (cm *CertificateManager) RolloutCertificateData(c *CertificateData) (bool, 
 		return false, fmt.Errorf("failed to get certificate from server: %w", err)
 	}
 
-	fileNeedsRollout, err := cm.needsRollout(c)
+	fileNeedsRollout, err := cm.NeedsRollout(c)
 	if err != nil {
 		return false, fmt.Errorf("failed to check certificate on disk: %w", err)
 	}
@@ -185,7 +185,7 @@ func (cm *CertificateManager) RolloutCertificateData(c *CertificateData) (bool, 
 			cm.Logger.Info("Forcing file system change due to --force", "name", c.Name)
 		}
 
-		err = cm.writeToDisk(c)
+		err = cm.WriteToDisk(c)
 		if err != nil {
 			return false, fmt.Errorf("failed to handle certificate: %w", err)
 		}
@@ -203,10 +203,10 @@ func (cm *CertificateManager) RolloutCertificateData(c *CertificateData) (bool, 
 	}
 }
 
-// readFromDisk reads file data from disk and populates the data []byte field.
+// ReadFromDisk reads file data from disk and populates the data []byte field.
 //
 // Returns error or nil on success
-func (c *CertificateData) readFromDisk() error {
+func (c *CertificateData) ReadFromDisk() error {
 	filebytes, err := os.ReadFile(c.FilePath)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -220,11 +220,11 @@ func (c *CertificateData) readFromDisk() error {
 	return nil
 }
 
-// needsRollout checks the data []bytes against the data on disk.
+// NeedsRollout checks the data []bytes against the data on disk.
 //
 // Returns true if file needs rollout, false if not
-func (cm *CertificateManager) needsRollout(c *CertificateData) (bool, error) {
-	err := c.readFromDisk()
+func (cm *CertificateManager) NeedsRollout(c *CertificateData) (bool, error) {
+	err := c.ReadFromDisk()
 
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -247,10 +247,10 @@ func (cm *CertificateManager) needsRollout(c *CertificateData) (bool, error) {
 	return hashesAreDifferent, nil
 }
 
-// writeToDisk flushes the certificate data to disk.
+// WriteToDisk flushes the certificate data to disk.
 //
 // Returns error or nil on success.
-func (cm *CertificateManager) writeToDisk(c *CertificateData) error {
+func (cm *CertificateManager) WriteToDisk(c *CertificateData) error {
 	if configuration.DryRun {
 		cm.Logger.Debug("DRY-RUN: writing data to file", "path", c.FilePath)
 		return nil
@@ -339,10 +339,10 @@ func (cm *CertificateManager) FetchDataFromServer(c *CertificateData) error {
 	return nil
 }
 
-// handleCertificateAction executes the user-defined action after successful certificate deployment
+// HandleSingleCertificateAction executes the user-defined action after successful certificate deployment
 //
 // Returns error or nil, StdOut as string, and StdErr as string
-func (cm *CertificateManager) handleSingleCertificateAction(action string) (error, string, string) {
+func (cm *CertificateManager) HandleSingleCertificateAction(action string) (error, string, string) {
 	if action == "" {
 		return nil, "", ""
 	}
@@ -377,7 +377,7 @@ func (cm *CertificateManager) HandleCertificateActions(certificates *[]Certifica
 	}
 
 	for action, actionCertificates := range actionMap {
-		err, stdout, stderr := cm.handleSingleCertificateAction(action)
+		err, stdout, stderr := cm.HandleSingleCertificateAction(action)
 		if err != nil {
 			cm.Logger.Error(
 				"An error occured during rollout action",

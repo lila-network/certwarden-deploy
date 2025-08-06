@@ -14,6 +14,10 @@ import (
 	"gitlab.lila.network/lila-network/certwarden-deploy/internal/constants"
 )
 
+func stubLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{}))
+}
+
 func TestFetchDataFromServer_Success(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		expectedPath := constants.CertificateApiPath + "testCert"
@@ -29,7 +33,7 @@ func TestFetchDataFromServer_Success(t *testing.T) {
 
 	cm := certificates.CertificateManager{
 		Config:     &configuration.ConfigFileData{BaseURL: ts.URL},
-		Logger:     slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{})),
+		Logger:     stubLogger(),
 		HTTPClient: ts.Client(),
 	}
 	c := &certificates.CertificateData{
@@ -56,7 +60,7 @@ func TestFetchDataFromServer_Unauthorized(t *testing.T) {
 
 	cm := certificates.CertificateManager{
 		Config:     &configuration.ConfigFileData{BaseURL: ts.URL},
-		Logger:     slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{})),
+		Logger:     stubLogger(),
 		HTTPClient: ts.Client(),
 	}
 	c := &certificates.CertificateData{
