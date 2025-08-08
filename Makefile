@@ -15,5 +15,8 @@ clean:
 test:
 	go test -cover ./...
 
+coverage:
+	go test -coverprofile=cover.profile ./... && go tool cover -func cover.profile
+
 # Set a version for the build
 VERSION := $(shell git describe --tags --always)

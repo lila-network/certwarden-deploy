@@ -21,9 +21,18 @@ func (file FileType) String() string {
 	return "unknown"
 }
 
-// GenericCertificate is a generic container to enable us to
+// A Certificate combines certificate, key and CA data in one struct
+type Certificate struct {
+	Certificate          *CertificateData
+	Key                  *CertificateData
+	CertificateAuthority *CertificateData
+	RolloutAction        string
+	NeedsAction          bool
+}
+
+// CertificateData is a generic container to enable us to
 // handle both certificates and keys with one function
-type GenericCertificate struct {
+type CertificateData struct {
 	Name     string
 	FilePath string
 	Secret   string
@@ -32,8 +41,8 @@ type GenericCertificate struct {
 	Type FileType
 
 	// Bytes fetched from the server
-	serverBytes []byte
+	ServerBytes []byte
 
 	// Bytes fetched from disk
-	diskBytes []byte
+	DiskBytes []byte
 }

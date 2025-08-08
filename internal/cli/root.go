@@ -43,5 +43,11 @@ func handleRootCmd(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	certificates.HandleCertificates(log, config)
+	cm := certificates.NewCertificateManager(log, config)
+
+	certs := cm.GetCertificatesFromConfig()
+
+	cm.HandleCertificates(certs)
+
+	cm.HandleCertificateActions(certs)
 }

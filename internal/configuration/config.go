@@ -2,10 +2,16 @@ package configuration
 
 import (
 	"fmt"
+	"net/http"
 	"os"
 
 	"github.com/goccy/go-yaml"
 )
+
+// HTTPClient is a generic Interface for HTTP Clients
+type HTTPClient interface {
+	Do(req *http.Request) (*http.Response, error)
+}
 
 type ConfigLoader interface {
 	readDataFromFile() ([]byte, error)
