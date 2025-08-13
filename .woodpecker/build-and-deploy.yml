@@ -15,7 +15,7 @@ steps:
   build:
     secrets:
       - FORGEJO_APIKEY
-    image: golang:1.22-alpine
+    image: golang:1.25-alpine
     environment:
       - APP_NAME=certwarden-deploy
       - FORGE=https://code.lila.network
