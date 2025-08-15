@@ -9,7 +9,7 @@ when:
 
 steps:
   build:
-    image: golang:1.22-bookworm
+    image: golang:1.25-bookworm
     environment:
       - HUGO_VERSION=0.128.1
       - TZ=Europe/Berlin
