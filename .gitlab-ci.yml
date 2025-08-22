@@ -16,7 +16,7 @@ docs-build-hugo:
   variables:
     HUGO_VERSION: 0.128.1
     TZ: Europe/Berlin
-  image: docker.io/library/golang:1.24-bookworm@sha256:2679c15c940573aded505b2f2fbbd4e718b5172327aae3ab9f43a10a5c700dfc
+  image: docker.io/library/golang:1.24-bookworm@sha256:ab1d1823abb55a9504d2e3e003b75b36dbeb1cbcc4c92593d85a84ee46becc6c
   before_script:
     - wget https://github.com/gohugoio/hugo/releases/download/v${HUGO_VERSION}/hugo_extended_${HUGO_VERSION}_linux-amd64.deb
     - apt install ./hugo_extended_${HUGO_VERSION}_linux-amd64.deb
@@ -50,12 +50,12 @@ test-mr:
   rules:
     - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
   stage: test
-  image: docker.io/library/golang:1.24-bookworm@sha256:2679c15c940573aded505b2f2fbbd4e718b5172327aae3ab9f43a10a5c700dfc
+  image: docker.io/library/golang:1.24-bookworm@sha256:ab1d1823abb55a9504d2e3e003b75b36dbeb1cbcc4c92593d85a84ee46becc6c
   script:
     - make test
 
 build-deploy:
-  image: docker.io/library/golang:1.24-bookworm@sha256:2679c15c940573aded505b2f2fbbd4e718b5172327aae3ab9f43a10a5c700dfc
+  image: docker.io/library/golang:1.24-bookworm@sha256:ab1d1823abb55a9504d2e3e003b75b36dbeb1cbcc4c92593d85a84ee46becc6c
   stage: build-deploy
   rules:
     - if: '$CI_COMMIT_TAG'
