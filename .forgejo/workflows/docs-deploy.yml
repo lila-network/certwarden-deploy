@@ -20,7 +20,9 @@ jobs:
       
       - name: Setup Go
         uses: https://github.com/actions/setup-go@v6
-      
+        with:
+          go-version: 'stable'
+          
       - name: Setup Hugo
         uses: https://github.com/peaceiris/actions-hugo@v3
         with:
