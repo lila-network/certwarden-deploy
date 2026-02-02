@@ -26,11 +26,14 @@ jobs:
       
       - name: Setup rsync
         run: apt-get update && apt-get install -y rsync git
+       
+      - name: Switch to docs directory
+        run: cd docs/
       
       - name: Build website
         run: hugo --minify --destination ./public
 
-      - name: Build website
+      - name: Deploy website
         run: |
           mkdir -p "$HOME/.ssh"
           echo "${{ secrets.SSH_KEY }}" > $HOME/.ssh/id_ed25519
