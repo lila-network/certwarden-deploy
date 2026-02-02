@@ -79,11 +79,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Minimal viable application
 - some documentation
 
-[unreleased]: https://gitlab.lila.network/lila-network/certwarden-deploy/-/compare/0.2.4...HEAD
-[0.2.4]: https://gitlab.lila.network/lila-network/certwarden-deploy/-/compare/0.2.3..0.2.4
-[0.2.3]: https://gitlab.lila.network/lila-network/certwarden-deploy/-/compare/0.2.2..0.2.3
-[0.2.2]: https://gitlab.lila.network/lila-network/certwarden-deploy/-/compare/0.2.1..0.2.2
-[0.2.1]: https://gitlab.lila.network/lila-network/certwarden-deploy/-/compare/0.2.0..0.2.1
-[0.2.0]: https://gitlab.lila.network/lila-network/certwarden-deploy/-/compare/0.1.1..0.2.0
-[0.1.1]: https://gitlab.lila.network/lila-network/certwarden-deploy/-/compare/0.1.0..0.1.1
-[0.1.0]: https://gitlab.lila.network/lila-network/certwarden-deploy/-/tree/0.1.0
+[unreleased]: https://code.lila.network/lila-network/certwarden-deploy/compare/0.2.4...HEAD
+[0.2.4]: https://code.lila.network/lila-network/certwarden-deploy/compare/0.2.3..0.2.4
+[0.2.3]: https://code.lila.network/lila-network/certwarden-deploy/compare/0.2.2..0.2.3
+[0.2.2]: https://code.lila.network/lila-network/certwarden-deploy/compare/0.2.1..0.2.2
+[0.2.1]: https://code.lila.network/lila-network/certwarden-deploy/compare/0.2.0..0.2.1
+[0.2.0]: https://code.lila.network/lila-network/certwarden-deploy/compare/0.1.1..0.2.0
+[0.1.1]: https://code.lila.network/lila-network/certwarden-deploy/compare/0.1.0..0.1.1
+[0.1.0]: https://code.lila.network/lila-network/certwarden-deploy/src/tag/0.1.0

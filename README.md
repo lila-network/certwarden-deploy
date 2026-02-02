@@ -67,12 +67,12 @@ certwarden-deploy -v
 
 ## Contributing
 
-The source code for `certwarden-deploy` is hosted on my own GitLab Instance [gitlab.lila.network](https://gitlab.lila.network/lila-network/certwarden-deploy) to manage issues, pull requests and CI/CD.
+The source code for `certwarden-deploy` is hosted on my own Forgejo Instance [code.lila.network](https://code.lila.network/lila-network/certwarden-deploy) to manage issues, pull requests and CI/CD.
 
 - If you have a trivial fix or improvement, go ahead and send a diff to the maintainer(s) of this repository (see
-  [MAINTAINERS.md](https://gitlab.lila.network/lila-network/certwarden-deploy/-/blob/main/MAINTAINERS.md)).
+  [MAINTAINERS.md](https://code.lila.network/lila-network/certwarden-deploy/src/branch/main/MAINTAINERS.md)).
 
-- If you plan to do something more involved, first please [send me a mail](mailto:adora@lila.network?subject=%5Bcertwarden-deploy%5D) so I can help you there.
+- If you plan to do something more involved, first please [send me a mail](mailto:me@adora.codes?subject=%5Bcertwarden-deploy%5D) so I can help you there.
 
 ### Non-development Contibutions
 
@@ -83,8 +83,8 @@ share what works.
 
 ## Changelog
 
-You can find the Changelog here: [Changelog](https://gitlab.lila.network/lila-network/certwarden-deploy/-/blob/main/CHANGELOG.md)
+You can find the Changelog here: [Changelog](https://code.lila.network/lila-network/certwarden-deploy/src/branch/main/CHANGELOG.md)
 
 ## License
 
-`certwarden-deploy` is available under the MIT license. See the [LICENSE](https://gitlab.lila.network/lila-network/certwarden-deploy/-/blob/main/LICENSE) file for more info.
+`certwarden-deploy` is available under the MIT license. See the [LICENSE](https://code.lila.network/lila-network/certwarden-deploy/src/branch/main/LICENSE) file for more info.

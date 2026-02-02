@@ -76,12 +76,12 @@ certwarden-deploy -v
 
 ## Contributing
 
-I use my own GitLab Instance [gitlab.lila.network](https://gitlab.lila.network/lila-network/certwarden-deploy) to manage issues, pull requests and CI/CD.
+I use my own Forgejo Instance [code.lila.network](https://code.lila.network/lila-network/certwarden-deploy) to manage issues, pull requests and CI/CD.
 
 * If you have a trivial fix or improvement, go ahead and send a diff to the maintainer(s) of this repository (see
-  [MAINTAINERS.md](https://gitlab.lila.network/lila-network/certwarden-deploy/-/blob/main/MAINTAINERS.md)).
+  [MAINTAINERS.md](https://code.lila.network/lila-network/certwarden-deploy/src/branch/main/MAINTAINERS.md)).
 
-* If you plan to do something more involved, first please [send me a mail](mailto:adora@lila.network?subject=%5Bcertwarden-deploy%5D) so I can create an account for you.
+* If you plan to do something more involved, first please [send me a mail](mailto:me@adora.codes?subject=%5Bcertwarden-deploy%5D) so I can create an account for you.
 
 ### Non-development Contibutions
 
@@ -92,7 +92,7 @@ share what works.
 
 ## Changelog
 
-You can find the Changelog here: [Changelog](https://gitlab.lila.network/lila-network/certwarden-deploy/-/blob/main/CHANGELOG.md)
+You can find the Changelog here: [Changelog](https://code.lila.network/lila-network/certwarden-deploy/src/branch/main/CHANGELOG.md)
 
 ## License
 

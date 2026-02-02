@@ -2,7 +2,7 @@ package constants
 
 var Version string
 
-var UserAgent = "certwarden-deploy/" + Version + " +https://gitlab.lila.network/lila-network/certwarden-deploy"
+var UserAgent = "certwarden-deploy/" + Version + " +https://code.lila.network/lila-network/certwarden-deploy"
 
 const CertificateApiPath = "/certwarden/api/v1/download/certificates/"
 const KeyApiPath = "/certwarden/api/v1/download/privatekeys/"
