@@ -22,11 +22,11 @@ jobs:
         uses: https://github.com/actions/setup-go@v6
         with:
           go-version: 'stable'
-          
+
       - name: Setup Hugo
         uses: https://github.com/peaceiris/actions-hugo@v3
         with:
-          hugo-version: 'latest'
+          hugo-version: '0.128.1'
           extended: true
       
       - name: Setup rsync
