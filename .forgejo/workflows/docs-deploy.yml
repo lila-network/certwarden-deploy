@@ -18,6 +18,9 @@ jobs:
       - name: Checkout repository
         uses: https://github.com/actions/checkout@v6
       
+      - name: Setup Go
+        uses: https://github.com/actions/setup-go@6
+      
       - name: Setup Hugo
         uses: https://github.com/peaceiris/actions-hugo@v3
         with:
