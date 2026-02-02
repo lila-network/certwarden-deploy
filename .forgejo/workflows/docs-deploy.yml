@@ -27,13 +27,12 @@ jobs:
       - name: Setup rsync
         run: apt-get update && apt-get install -y rsync git
        
-      - name: Switch to docs directory
-        run: cd docs/
-      
       - name: Build website
+        working-directory: "$${{ forgejo.workspace }}/docs"
         run: hugo --minify --destination ./public
 
       - name: Deploy website
+        working-directory: "$${{ forgejo.workspace }}/docs"
         run: |
           mkdir -p "$HOME/.ssh"
           echo "${{ secrets.SSH_KEY }}" > $HOME/.ssh/id_ed25519
