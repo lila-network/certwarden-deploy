@@ -19,7 +19,7 @@ jobs:
         uses: https://github.com/actions/checkout@v6
       
       - name: Setup Go
-        uses: https://github.com/actions/setup-go@6
+        uses: https://github.com/actions/setup-go@v6
       
       - name: Setup Hugo
         uses: https://github.com/peaceiris/actions-hugo@v3
