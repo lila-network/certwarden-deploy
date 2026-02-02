@@ -1,0 +1,39 @@
+name: Deploy via rsync
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.forgejo/workflows/docs-deploy.yml'
+      - 'docs/**'
+
+env:
+  TARGET_PATH: /webroot/certwarden-deploy.adora.codes
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: https://github.com/actions/checkout@v6
+      
+      - name: Setup Hugo
+        uses: https://github.com/peaceiris/actions-hugo@v3
+        with:
+          hugo-version: 'latest'
+          extended: true
+      
+      - name: Setup rsync
+        run: apt-get update && apt-get install -y rsync git
+      
+      - name: Build website
+        run: hugo --minify --destination ./public
+
+      - name: Build website
+        run: |
+          mkdir -p "$HOME/.ssh"
+          echo "${{ secrets.SSH_KEY }}" > $HOME/.ssh/id_ed25519
+          chmod 0600 "$HOME/.ssh/id_ed25519"
+          ssh-keyscan -t ed25519 -p "${{ vars.RSYNC_TARGET_PORT }}" "${{ vars.RSYNC_TARGET_SERVER }}" >> "$HOME/.ssh/known_hosts"
+          rsync -avh -e "ssh -p ${{ vars.RSYNC_TARGET_PORT }}" --delete ./public/ "${{ vars.RSYNC_TARGET_USER }}@${{ vars.RSYNC_TARGET_SERVER }}:${{ env.TARGET_PATH }}"
