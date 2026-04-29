@@ -32,6 +32,9 @@ func (f *FileConfigLoader) unmarshalDataToConfig(data []byte) (ConfigFileData, e
 
 func GetConfig(loader ConfigLoader) (*ConfigFileData, error) {
 	var cfg ConfigFileData
+	if loader == nil {
+		return nil, fmt.Errorf("failed to initialize config loader: loader is nil")
+	}
 
 	data, err := loader.readDataFromFile()
 	if err != nil {

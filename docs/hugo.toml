@@ -1,9 +1,8 @@
 baseURL = 'https://certwarden-deploy.adora.codes/'
 languageCode = 'en-us'
 title = 'certwarden-deploy'
-author = ""
+author = "Adora Laura Kalb <me@adora.codes>"
 
-theme = "github.com/McShelby/hugo-theme-relearn"
 repo = "https://code.lila.network/adoralaura/certwarden-deploy"
 
 enableGitInfo = true
@@ -15,14 +14,14 @@ uniqueHomePage = false # change to false to add sidebar to homepage
   disableLandingPageButton = false
   disableLanguageSwitchingButton = false
   externalLinkTarget = "_blank"
-  headingPre = '<script defer src="https://esseles.adora.codes/script.js" data-website-id="fe4ec517-25b2-4e0d-b502-6bd3a7420849"></script>'
+  headingPre = '<script defer src="https://analytics.adora.codes/script.js" data-website-id="fe4ec517-25b2-4e0d-b502-6bd3a7420849"></script>'
   disableExplicitIndexURLs = true
 
 [params.author]
   name = 'Adora Laura Kalb'
 
 [outputs]
-  home = ['html', 'rss', 'search']
+  home = ['html', 'rss']
 
 [menu]
   [[menu.shortcuts]]
@@ -34,7 +33,7 @@ uniqueHomePage = false # change to false to add sidebar to homepage
   [[menu.shortcuts]]
     identifier = 'hugodoc'
     name = "<i class='fa-fw fas fa-arrow-up-right-from-square'></i> CertWarden Website"
-    url = 'https://certwarden-deploy.adora.codes/'
+    url = 'https://www.certwarden.com/'
     weight = 20
 
 #  [[menu.shortcuts]]
@@ -46,3 +45,7 @@ uniqueHomePage = false # change to false to add sidebar to homepage
 #    name = "<i class='fa-fw fas fa-tags'></i> Tags"
 #    url = 'tags/'
 #    weight = 40
+
+[module]
+  [[module.imports]]
+    path = 'github.com/McShelby/hugo-theme-relearn'

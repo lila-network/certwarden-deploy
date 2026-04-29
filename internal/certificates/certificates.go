@@ -12,11 +12,12 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
-	"gitlab.lila.network/lila-network/certwarden-deploy/internal/configuration"
-	"gitlab.lila.network/lila-network/certwarden-deploy/internal/constants"
+	"code.lila.network/lila-network/certwarden-deploy/internal/configuration"
+	"code.lila.network/lila-network/certwarden-deploy/internal/constants"
 )
 
 func HandleCertificates(logger *slog.Logger, config *configuration.ConfigFileData) {
@@ -73,10 +74,15 @@ func HandleCertificates(logger *slog.Logger, config *configuration.ConfigFileDat
 
 		// if cert OR key changed OR --force
 		if (certOnDiskChanged || keyOnDiskChanged || caOnDiskChanged) || configuration.Force {
+			if configuration.DryRun {
+				logger.Info("DRY-RUN: skipping post-rollout action", "name", cert.Name)
+				continue
+			}
 
 			if configuration.Force {
 				logger.Info("Forcing file system change due to --force", "name", cert.Name)
 			}
+
 			err = handleCertificateAction(cert.Action)
 			if err != nil {
 				logger.Error("Failed to execute post-rollout action", "name", cert.Name, "error", err)
@@ -185,27 +191,72 @@ func (c *GenericCertificate) writeToDisk(logger *slog.Logger) error {
 		return nil
 	}
 
-	file, err := os.Create(c.FilePath)
-	if err != nil {
-		return fmt.Errorf("failed to open file for writing: %w", err)
+	dir := filepath.Dir(c.FilePath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("failed to create parent directory: %w", err)
 	}
 
+	mode := fs.FileMode(0644)
+	if stat, err := os.Stat(c.FilePath); err == nil {
+		mode = stat.Mode().Perm()
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("failed to inspect file before writing: %w", err)
+	}
+
+	file, err := os.CreateTemp(dir, ".certwarden-deploy-*")
+	if err != nil {
+		return fmt.Errorf("failed to open temporary file for writing: %w", err)
+	}
+
+	tempPath := file.Name()
+	cleanupTempFile := true
 	defer func(l *slog.Logger) {
-		if err := file.Close(); err != nil {
-			l.Error("failed to close file", "path", c.FilePath, "error", err)
+		if cleanupTempFile {
+			if removeErr := os.Remove(tempPath); removeErr != nil && !errors.Is(removeErr, fs.ErrNotExist) {
+				l.Error("failed to clean up temporary file", "path", tempPath, "error", removeErr)
+			}
 		}
 	}(logger)
+
+	if err := file.Chmod(mode); err != nil {
+		if closeErr := file.Close(); closeErr != nil {
+			logger.Error("failed to close temporary file after chmod error", "path", tempPath, "error", closeErr)
+		}
+		return fmt.Errorf("failed to set temporary file permissions: %w", err)
+	}
 
 	w := bufio.NewWriter(file)
 
 	if _, err := w.Write(c.serverBytes); err != nil {
+		if closeErr := file.Close(); closeErr != nil {
+			logger.Error("failed to close temporary file after write error", "path", tempPath, "error", closeErr)
+		}
 		return fmt.Errorf("failed to write data to file: %w", err)
 	}
 
 	if err = w.Flush(); err != nil {
+		if closeErr := file.Close(); closeErr != nil {
+			logger.Error("failed to close temporary file after flush error", "path", tempPath, "error", closeErr)
+		}
 		return fmt.Errorf("failed to flush data to file: %w", err)
 	}
 
+	if err = file.Sync(); err != nil {
+		if closeErr := file.Close(); closeErr != nil {
+			logger.Error("failed to close temporary file after sync error", "path", tempPath, "error", closeErr)
+		}
+		return fmt.Errorf("failed to sync data to file: %w", err)
+	}
+
+	if err = file.Close(); err != nil {
+		return fmt.Errorf("failed to close temporary file: %w", err)
+	}
+
+	if err = os.Rename(tempPath, c.FilePath); err != nil {
+		return fmt.Errorf("failed to replace target file with temporary file: %w", err)
+	}
+
+	cleanupTempFile = false
 	logger.Debug("Successfully wrote to file", "path", c.FilePath)
 	return nil
 }
@@ -224,6 +275,8 @@ func (c *GenericCertificate) fetchFromServer(logger *slog.Logger, baseUrl string
 		apiPath = constants.KeyApiPath
 	case CaCertificateFile:
 		apiPath = constants.CaCertificateApiPath
+	default:
+		return fmt.Errorf("unsupported file type: %v", c.Type)
 	}
 
 	url := baseUrl + apiPath + c.Name
@@ -282,11 +335,10 @@ func (c *GenericCertificate) fetchFromServer(logger *slog.Logger, baseUrl string
 
 // handleCertificateAction executes the user-defined action after successful certificate deployment
 func handleCertificateAction(action string) error {
-	if action == "" {
+	sargs := strings.Fields(action)
+	if len(sargs) == 0 {
 		return nil
 	}
-
-	sargs := strings.Split(action, " ")
 
 	cmd := exec.Command(sargs[0], sargs[1:]...)
 	err := cmd.Run()

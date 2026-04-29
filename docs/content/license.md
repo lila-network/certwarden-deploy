@@ -14,7 +14,7 @@ The source code of `certwarden-deploy` is available under the MIT license:
 ```plaintext
 MIT License
 
-Copyright © 2024 Adora Laura Kalb <adora@lila.network>
+Copyright © 2024-2026 Adora Laura Kalb <me@adora.codes>
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of 
 this software and associated documentation files (the "Software"), to deal in 
