@@ -1,4 +1,4 @@
-module gitlab.lila.network/lila-network/certwarden-deploy-docs
+module code.lila.network/lila-network/certwarden-deploy-docs
 
 go 1.22.2
 

@@ -4,11 +4,11 @@ import (
 	"log/slog"
 	"os"
 
+	"code.lila.network/lila-network/certwarden-deploy/internal/certificates"
+	"code.lila.network/lila-network/certwarden-deploy/internal/configuration"
+	"code.lila.network/lila-network/certwarden-deploy/internal/constants"
+	"code.lila.network/lila-network/certwarden-deploy/internal/logger"
 	"github.com/spf13/cobra"
-	"gitlab.lila.network/lila-network/certwarden-deploy/internal/certificates"
-	"gitlab.lila.network/lila-network/certwarden-deploy/internal/configuration"
-	"gitlab.lila.network/lila-network/certwarden-deploy/internal/constants"
-	"gitlab.lila.network/lila-network/certwarden-deploy/internal/logger"
 )
 
 var RootCmd = &cobra.Command{

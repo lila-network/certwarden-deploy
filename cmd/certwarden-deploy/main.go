@@ -1,5 +1,5 @@
 /*
-Copyright © 2024 Laura Kalb <adora@lila.network>
+Copyright © 2024 Adora Kalb <me@adora.codes>
 The code of this project is available under the MIT license. See the LICENSE file for more info.
 */
 package main
@@ -7,8 +7,8 @@ package main
 import (
 	"os"
 
-	"gitlab.lila.network/lila-network/certwarden-deploy/internal/cli"
-	"gitlab.lila.network/lila-network/certwarden-deploy/internal/configuration"
+	"code.lila.network/lila-network/certwarden-deploy/internal/cli"
+	"code.lila.network/lila-network/certwarden-deploy/internal/configuration"
 )
 
 func main() {

@@ -1,12 +1,12 @@
 # Contributing
 
-I use my own [GitLab Instance](https://code.lila.network/lila-network/certwarden-deploy) to manage issues and pull requests.
+I use my own [Forgejo Instance](https://code.lila.network/lila-network/certwarden-deploy) to manage issues and pull requests.
 
 * If you have a trivial fix or improvement, go ahead and create a pull request,
   addressing (with `@...`) the maintainer of this repository (see
   [MAINTAINERS.md](MAINTAINERS.md)) in the description of the pull request.
 
-* If you plan to do something more involved, first please [send me a mail]( mailto:adora@lila.network?subject=%5Bcertwarden-deploy%5D).
+* If you plan to do something more involved, first please [send me a mail]( mailto:me@adora.codes?subject=%5Bcertwarden-deploy%5D).
 
 # What to contribute
 
