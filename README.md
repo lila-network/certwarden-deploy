@@ -10,13 +10,13 @@ Installation of the required CertWarden instance is out of scope of this documen
 
 Before building the project, ensure you have the following installed:
 
-- make: A build automation tool
+- task: A task runner tool (see <https://taskfile.dev/>)
 - Go: Version 1.22 or later
 
 To build the project, first clone the projects git repository, then navigate to the project's root directory and run the following command:
 
 ```shell
-make build
+task build
 ```
 
 This command will generate the `certwarden-deploy` binary in the `bin/` folder.

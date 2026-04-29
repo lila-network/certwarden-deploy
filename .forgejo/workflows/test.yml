@@ -1,0 +1,27 @@
+---
+name: Test
+on:
+  push:
+    branches: ["feature/*"]
+
+concurrency:
+  group: ${{ forgejo.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: https://github.com/actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      
+      - name: Setup Go
+        uses: https://github.com/actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version: "1.24.4"
+
+      - name: Install Task
+        uses: https://github.com/go-task/setup-task@3be4020d41929789a01026e0e427a4321ce0ad44 # v2.0.0
+      
+      - name: Run Tests
+        run: task test

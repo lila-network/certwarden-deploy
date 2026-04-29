@@ -8,7 +8,7 @@ I use my own [Forgejo Instance](https://code.lila.network/lila-network/certwarde
 
 * If you plan to do something more involved, first please [send me a mail]( mailto:me@adora.codes?subject=%5Bcertwarden-deploy%5D).
 
-# What to contribute
+## What to contribute
 
 The best way to help without speaking a lot of Go would be to share your
 configuration, alerts, dashboards, and recording rules. If you have something

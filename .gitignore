@@ -25,7 +25,7 @@
 !*.md
 !LICENSE
 
-!Makefile
+!taskfile.yaml
 
 # Woodpecker CI
 !.woodpecker/*

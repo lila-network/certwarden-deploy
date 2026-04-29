@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Unit and E2E tests
+
+### Changed
+
+- file write procedure got more resilient
+
 ## [0.2.4] - 2025-07-09
 
 ### Changed
