@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"code.lila.network/lila-network/certwarden-deploy/internal/constants"
+	"github.com/lila-network/certwarden-deploy/internal/constants"
 )
 
 func TestCLI_DeploysFilesAndOnlyRunsActionOnChange(t *testing.T) {

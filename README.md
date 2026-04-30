@@ -1,8 +1,6 @@
 # certwarden-deploy
 
-[![Please don't upload to GitHub](https://nogithub.codeberg.page/badge.svg)](https://nogithub.codeberg.page)
-
-This is a simple binary to deploy certificates from a [CertWarden](https://www.certwarden.com/) instance.
+`certwarden-deploy` is a small companion binary that pulls certificates from a [CertWarden](https://www.certwarden.com) instance and writes them to local disk without requiring Docker.
 
 ## Quick Start
 
@@ -67,10 +65,10 @@ certwarden-deploy -v
 
 ## Contributing
 
-The source code for `certwarden-deploy` is hosted on my own Forgejo Instance [code.lila.network](https://code.lila.network/lila-network/certwarden-deploy) to manage issues, pull requests and CI/CD.
+The source code for `certwarden-deploy` is hosted on my own Forgejo Instance [code.lila.network](https://github.com/lila-network/certwarden-deploy) to manage issues, pull requests and CI/CD.
 
 - If you have a trivial fix or improvement, go ahead and send a diff to the maintainer(s) of this repository (see
-  [MAINTAINERS.md](https://code.lila.network/lila-network/certwarden-deploy/src/branch/main/MAINTAINERS.md)).
+  [MAINTAINERS.md](https://github.com/lila-network/certwarden-deploy/src/branch/main/MAINTAINERS.md)).
 
 - If you plan to do something more involved, first please [send me a mail](mailto:me@adora.codes?subject=%5Bcertwarden-deploy%5D) so I can help you there.
 
@@ -83,8 +81,8 @@ share what works.
 
 ## Changelog
 
-You can find the Changelog here: [Changelog](https://code.lila.network/lila-network/certwarden-deploy/src/branch/main/CHANGELOG.md)
+You can find the Changelog here: [Changelog](https://github.com/lila-network/certwarden-deploy/src/branch/main/CHANGELOG.md)
 
 ## License
 
-`certwarden-deploy` is available under the MIT license. See the [LICENSE](https://code.lila.network/lila-network/certwarden-deploy/src/branch/main/LICENSE) file for more info.
+`certwarden-deploy` is available under the MIT license. See the [LICENSE](https://github.com/lila-network/certwarden-deploy/src/branch/main/LICENSE) file for more info.
