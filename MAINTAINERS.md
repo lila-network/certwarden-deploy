@@ -1,3 +1,3 @@
 # Maintainers
 
-* Adora Laura Kalb <me@adora.codes> @adora
+* Adora Laura Kalb <me@adora.codes> @cosmadora

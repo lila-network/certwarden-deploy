@@ -1,16 +1,31 @@
 # Contributing
 
-I use my own [Forgejo Instance](https://code.lila.network/lila-network/certwarden-deploy) to manage issues and pull requests.
+Thank you for your interest in contributing.
 
-* If you have a trivial fix or improvement, go ahead and create a pull request,
-  addressing (with `@...`) the maintainer of this repository (see
-  [MAINTAINERS.md](MAINTAINERS.md)) in the description of the pull request.
+`certwarden-deploy` uses GitHub to manage issues, feature requests, questions, and pull requests.
 
-* If you plan to do something more involved, first please [send me a mail]( mailto:me@adora.codes?subject=%5Bcertwarden-deploy%5D).
+## Pull requests
+
+Well-described pull requests are welcome.
+
+If you have a trivial fix or small improvement, feel free to open a pull request directly. Please explain clearly what the change does and why it is useful.
+
+For larger changes, please open an issue first so the approach can be discussed before implementation work begins.
+
+## Issues, feature requests, and questions
+
+Please open a GitHub issue for:
+
+- bug reports
+- feature requests
+- larger proposed changes
+- questions
+- design or implementation discussions
+
+When opening an issue, include as much relevant information as possible, such as your use case, current behavior, expected behavior, logs, configuration snippets, or examples.
 
 ## What to contribute
 
-The best way to help without speaking a lot of Go would be to share your
-configuration, alerts, dashboards, and recording rules. If you have something
-that works and is not in the repository, please pay it forward and
-share what works.
+The best way to help without writing a lot of Go would be to share your configuration, usages, or deployment ideas.
+
+If you have something that works and is not yet in the repository, please pay it forward and share what works.

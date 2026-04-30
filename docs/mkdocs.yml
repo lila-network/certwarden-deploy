@@ -1,0 +1,62 @@
+# yaml-language-server: $schema=https://squidfunk.github.io/mkdocs-material/schema.json
+
+site_name: certwarden-deploy Docs
+site_url: https://certwarden-deploy.lila.network/
+repo_url: https://github.com/lila-network/certwarden-deploy
+repo_name: certwarden-deploy
+edit_uri: edit/main/docs/docs/
+
+nav:
+  - index.md
+  - installation.md
+  - configuration.md
+  - license.md
+
+theme:
+  name: material
+  features:
+    - content.action.edit
+    - content.code.copy
+    - content.code.select
+    - content.code.annotate
+    - navigation.expand
+    - navigation.sections
+    - navigation.top
+    - navigation.tracking
+    - toc.integrate 
+  palette:
+    # Palette auto
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: Switch to light mode
+
+    # Palette toggle for light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+
+    # Palette toggle for dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to automatic light/dark mode
+
+plugins:
+  - search
+  - git-committers:
+      repository: lila-network/certwarden-deploy
+      branch: main
+
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences

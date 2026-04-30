@@ -21,16 +21,16 @@ tasks:
 
   build:
     desc: Compile app
-    cmd: go build -ldflags="-w -s -X code.lila.network/lila-network/certwarden-deploy/internal/constants.Version={{.VERSION}}" -o bin/certwarden-deploy cmd/certwarden-deploy/main.go
+    cmd: go build -ldflags="-w -s -X github.com/lila-network/certwarden-deploy/internal/constants.Version={{.VERSION}}" -o bin/certwarden-deploy cmd/certwarden-deploy/main.go
 
 
   docs-build:
     desc: Build docs
     dir: docs/
-    cmd: hugo build
+    cmd: uv run mkdocs build --site-dir ./public/
 
 
   docs-serve:
     desc: Serve docs
     dir: docs/
-    cmd: hugo serve
+    cmd: uv run mkdocs serve --livereload

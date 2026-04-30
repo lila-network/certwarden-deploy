@@ -4,10 +4,10 @@ import (
 	"log/slog"
 	"os"
 
-	"code.lila.network/lila-network/certwarden-deploy/internal/certificates"
-	"code.lila.network/lila-network/certwarden-deploy/internal/configuration"
-	"code.lila.network/lila-network/certwarden-deploy/internal/constants"
-	"code.lila.network/lila-network/certwarden-deploy/internal/logger"
+	"github.com/lila-network/certwarden-deploy/internal/certificates"
+	"github.com/lila-network/certwarden-deploy/internal/configuration"
+	"github.com/lila-network/certwarden-deploy/internal/constants"
+	"github.com/lila-network/certwarden-deploy/internal/logger"
 	"github.com/spf13/cobra"
 )
 

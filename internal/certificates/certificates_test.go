@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"code.lila.network/lila-network/certwarden-deploy/internal/configuration"
-	"code.lila.network/lila-network/certwarden-deploy/internal/constants"
+	"github.com/lila-network/certwarden-deploy/internal/configuration"
+	"github.com/lila-network/certwarden-deploy/internal/constants"
 )
 
 func testLogger() *slog.Logger {

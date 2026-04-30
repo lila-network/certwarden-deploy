@@ -16,8 +16,8 @@ import (
 	"strings"
 	"time"
 
-	"code.lila.network/lila-network/certwarden-deploy/internal/configuration"
-	"code.lila.network/lila-network/certwarden-deploy/internal/constants"
+	"github.com/lila-network/certwarden-deploy/internal/configuration"
+	"github.com/lila-network/certwarden-deploy/internal/constants"
 )
 
 func HandleCertificates(logger *slog.Logger, config *configuration.ConfigFileData) {
