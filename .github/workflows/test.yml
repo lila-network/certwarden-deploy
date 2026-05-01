@@ -2,7 +2,9 @@
 name: Run Go Tests
 on:
   push:
-    branches: ["feature/*"]
+    branches: 
+      - "feature/*"
+      - "renovate/*"
 
 concurrency:
   group: ${{ github.ref }}
