@@ -25,6 +25,7 @@ type ConfigFileData struct {
 	BaseURL                      string            `yaml:"base_url"`
 	DisableCertificateValidation bool              `yaml:"disable_certificate_validation"`
 	Certificates                 []CertificateData `yaml:"certificates"`
+	Notifications                NotificationData  `yaml:"notification"`
 }
 
 // Struct that holds the details of a single managed certificate
@@ -37,6 +38,47 @@ type CertificateData struct {
 	CaPath            string `yaml:"ca_path"`
 	Action            string `yaml:"action"`
 }
+
+type NotificationData struct {
+	Ntfy NtfyData `yaml:"ntfy"`
+}
+
+type NtfyData struct {
+	Enabled                      bool         `yaml:"enabled"`
+	Endpoint                     string       `yaml:"endpoint"`
+	Topic                        string       `yaml:"topic"`
+	TitleOverride                string       `yaml:"title_override"`
+	Priority                     int          `yaml:"priority"`
+	DisableCertificateValidation bool         `yaml:"disable_certificate_validation"`
+	Auth                         NtfyAuthData `yaml:"auth"`
+}
+
+type NtfyAuthData struct {
+	Username string `yaml:"username"`
+	Password string `yaml:"password"`
+	Token    string `yaml:"token"`
+}
+
+func (a NtfyAuthData) Type() NtfyAuthMode {
+	if a.Token != "" {
+		return NtfyAuthModeToken
+	}
+
+	if (a.Username != "") && (a.Password != "") {
+		return NtfyAuthModeBasic
+	}
+
+	return NtfyAuthModeNone
+
+}
+
+type NtfyAuthMode string
+
+const (
+	NtfyAuthModeNone  NtfyAuthMode = "none"
+	NtfyAuthModeBasic NtfyAuthMode = "basic"
+	NtfyAuthModeToken NtfyAuthMode = "token"
+)
 
 type ConfigValidationError struct {
 	ErrorMessages []string
