@@ -8,18 +8,22 @@ import (
 	"github.com/lila-network/certwarden-deploy/internal/constants"
 )
 
-// validDownloadFormats lists the containers the privatecerts and
+// DownloadFormats lists the containers the privatecerts and
 // privatecertchains endpoints can return.
-var validDownloadFormats = []string{constants.FormatPEM, constants.FormatPKCS12, constants.FormatJKS}
+var DownloadFormats = []string{constants.FormatPEM, constants.FormatPKCS12, constants.FormatJKS}
 
-// isValidDownloadFormat reports whether format is empty (meaning the pem
+// IsValidDownloadFormat reports whether format is empty (meaning the pem
 // default) or one of the supported containers.
-func isValidDownloadFormat(format string) bool {
+//
+// Exported so that `fetch privatecert --format` is checked against the same
+// list the config file is checked against, rather than against a second copy of
+// it that could drift.
+func IsValidDownloadFormat(format string) bool {
 	if format == "" {
 		return true
 	}
 
-	for _, valid := range validDownloadFormats {
+	for _, valid := range DownloadFormats {
 		if format == valid {
 			return true
 		}
@@ -70,6 +74,27 @@ func isAbsoluteURL(raw string) bool {
 	return parsed.Scheme != "" && parsed.Host != ""
 }
 
+// ValidateBaseURL reports every problem with a base_url.
+//
+// Split out of IsValid so that the fetch subcommands can check the one field a
+// one-off download needs without also demanding the fields a deployment needs:
+// `fetch certificate example.com --base-url ... --api-key ...` has no cert_path
+// and must not be told to add one.
+func ValidateBaseURL(raw string) ConfigValidationError {
+	err := ConfigValidationError{}
+
+	if raw == "" {
+		err.Add(`Field 'base_url' in config file is required!`)
+	} else if !isAbsoluteURL(raw) {
+		// this also covers --base-url: the override is folded into BaseURL
+		// before validation, so a typo on the command line is caught here
+		// rather than by a confusing failure on the first request
+		err.Add(`Field 'base_url' must be an absolute URL including the scheme, got "` + raw + `"!`)
+	}
+
+	return err
+}
+
 // IsValid tests if the config read from file has all required parameters set.
 //
 // It has to run after ResolveSecrets: the cert_secret check below looks at the
@@ -82,14 +107,7 @@ func isAbsoluteURL(raw string) bool {
 func (c *ConfigFileData) IsValid() ConfigValidationError {
 	err := ConfigValidationError{}
 
-	if c.BaseURL == "" {
-		err.Add(`Field 'base_url' in config file is required!`)
-	} else if !isAbsoluteURL(c.BaseURL) {
-		// this also covers --base-url: the override is folded into BaseURL
-		// before validation, so a typo on the command line is caught here
-		// rather than by a confusing failure on the first request
-		err.Add(`Field 'base_url' must be an absolute URL including the scheme, got "` + c.BaseURL + `"!`)
-	}
+	err.Merge(ValidateBaseURL(c.BaseURL))
 
 	if _, httpErr := c.HTTPSettings(); httpErr.HasMessages() {
 		err.Merge(httpErr)
@@ -143,14 +161,14 @@ func (c *ConfigFileData) IsValid() ConfigValidationError {
 			}
 		}
 
-		if !isValidDownloadFormat(cert.PrivateCertFormat) {
+		if !IsValidDownloadFormat(cert.PrivateCertFormat) {
 			err.Add(`Field 'privatecert_format' for ` + cert.certificateSubject() +
-				" must be one of " + strings.Join(validDownloadFormats, ", ") + "!")
+				" must be one of " + strings.Join(DownloadFormats, ", ") + "!")
 		}
 
-		if !isValidDownloadFormat(cert.PrivateCertChainFormat) {
+		if !IsValidDownloadFormat(cert.PrivateCertChainFormat) {
 			err.Add(`Field 'privatecertchain_format' for ` + cert.certificateSubject() +
-				" must be one of " + strings.Join(validDownloadFormats, ", ") + "!")
+				" must be one of " + strings.Join(DownloadFormats, ", ") + "!")
 		}
 
 		re := regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)

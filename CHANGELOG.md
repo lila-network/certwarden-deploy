@@ -31,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Custom HTTP headers via the `http.headers` config block, for deployments behind an authenticating proxy (#36)
 - Configurable HTTP `timeout`, `retries` and `retry_backoff`, with retries on connection errors, timeouts, 429 and 5xx (#37)
 - Optional `groups` key: certificates that share secrets, paths and an action can be defined once, with `{name}` resolved per certificate. The flat `certificates` list keeps working and both can be used together (#38)
+- `fetch certificate|key|ca|privatecert|privatecertchain <name>` downloads a single artefact to stdout or to `--output`, with no filename template, no change detection and no action (#39)
 
 ### Changed
 
