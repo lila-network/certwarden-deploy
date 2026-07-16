@@ -51,7 +51,7 @@ func findLogLine(t *testing.T, logs string, substr string) string {
 	return ""
 }
 
-func TestWriteToDiskCreatesParentDirectories(t *testing.T) {
+func TestWriteTempFileCreatesParentDirectories(t *testing.T) {
 	t.Cleanup(func() {
 		configuration.DryRun = false
 	})
@@ -63,8 +63,12 @@ func TestWriteToDiskCreatesParentDirectories(t *testing.T) {
 		serverBytes: []byte("certificate-data"),
 	}
 
-	if err := cert.writeToDisk(testLogger()); err != nil {
-		t.Fatalf("writeToDisk returned error: %v", err)
+	if err := cert.writeTempFile(testLogger()); err != nil {
+		t.Fatalf("writeTempFile returned error: %v", err)
+	}
+
+	if err := cert.Commit(testLogger()); err != nil {
+		t.Fatalf("Commit returned error: %v", err)
 	}
 
 	data, err := os.ReadFile(target)
@@ -77,7 +81,7 @@ func TestWriteToDiskCreatesParentDirectories(t *testing.T) {
 	}
 }
 
-func TestWriteToDiskPreservesExistingPermissions(t *testing.T) {
+func TestWriteTempFilePreservesExistingPermissions(t *testing.T) {
 	t.Cleanup(func() {
 		configuration.DryRun = false
 	})
@@ -93,8 +97,12 @@ func TestWriteToDiskPreservesExistingPermissions(t *testing.T) {
 		serverBytes: []byte("new-data"),
 	}
 
-	if err := cert.writeToDisk(testLogger()); err != nil {
-		t.Fatalf("writeToDisk returned error: %v", err)
+	if err := cert.writeTempFile(testLogger()); err != nil {
+		t.Fatalf("writeTempFile returned error: %v", err)
+	}
+
+	if err := cert.Commit(testLogger()); err != nil {
+		t.Fatalf("Commit returned error: %v", err)
 	}
 
 	info, err := os.Stat(target)
@@ -663,5 +671,430 @@ func TestErrorBodyForLogCollapsesWhitespace(t *testing.T) {
 
 	if !strings.Contains(record, "certificate is not yet issued retry later") {
 		t.Fatalf("expected collapsed body on a single log record line, got %q", record)
+	}
+}
+
+// startArtefactServer serves one body per artefact type. A type missing from
+// bodies is answered with 500, which is how a mid-sequence fetch failure is
+// injected into an otherwise healthy certificate.
+func startArtefactServer(t *testing.T, bodies map[FileType]string) *httptest.Server {
+	t.Helper()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var fileType FileType
+
+		switch {
+		case strings.HasPrefix(r.URL.Path, constants.CertificateApiPath):
+			fileType = CertificateFile
+		case strings.HasPrefix(r.URL.Path, constants.KeyApiPath):
+			fileType = KeyFile
+		case strings.HasPrefix(r.URL.Path, constants.CaCertificateApiPath):
+			fileType = CaCertificateFile
+		default:
+			http.NotFound(w, r)
+			return
+		}
+
+		body, ok := bodies[fileType]
+		if !ok {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(server.Close)
+
+	return server
+}
+
+// seedFile writes a file that is already on disk when the run starts.
+func seedFile(t *testing.T, path string, content string, mode os.FileMode) {
+	t.Helper()
+
+	if err := os.WriteFile(path, []byte(content), mode); err != nil {
+		t.Fatalf("failed to seed file %s: %v", path, err)
+	}
+
+	// WriteFile honours the umask, so force the mode we asked for
+	if err := os.Chmod(path, mode); err != nil {
+		t.Fatalf("failed to chmod seeded file %s: %v", path, err)
+	}
+}
+
+// assertFileContents compares a file byte for byte, which is the whole point of
+// the #28 guards: "the file is still there" is not good enough, it has to be
+// the same bytes as before the failed run.
+func assertFileContents(t *testing.T, path string, want string) {
+	t.Helper()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("failed to read file %s: %v", path, err)
+	}
+
+	if string(data) != want {
+		t.Fatalf("unexpected contents of %s: got %q want %q", path, string(data), want)
+	}
+}
+
+// assertNoTempFiles fails if an aborted rollout left staged files behind.
+func assertNoTempFiles(t *testing.T, dir string) {
+	t.Helper()
+
+	leftovers, err := filepath.Glob(filepath.Join(dir, tempFilePattern))
+	if err != nil {
+		t.Fatalf("failed to glob for temporary files: %v", err)
+	}
+
+	if len(leftovers) != 0 {
+		t.Fatalf("temporary files left behind in %s: %v", dir, leftovers)
+	}
+}
+
+// assertSingleFailure checks that exactly one artefact of one certificate was
+// recorded as failed, and that the run reports the certificate failure exit code.
+func assertSingleFailure(t *testing.T, result RunResult, name string, fileType FileType) {
+	t.Helper()
+
+	if len(result.Failed) != 1 {
+		t.Fatalf("unexpected failure count: got %d want 1 (%v)", len(result.Failed), result.Failed)
+	}
+
+	if result.Failed[0].Name != name {
+		t.Fatalf("unexpected failed certificate name: got %q want %q", result.Failed[0].Name, name)
+	}
+
+	if result.Failed[0].Type != fileType {
+		t.Fatalf("unexpected failed file type: got %v want %v", result.Failed[0].Type, fileType)
+	}
+
+	if result.Failed[0].Err == nil {
+		t.Fatal("expected failure to carry an error")
+	}
+
+	if result.ExitCode() != ExitCertificateFailure {
+		t.Fatalf("unexpected exit code: got %d want %d", result.ExitCode(), ExitCertificateFailure)
+	}
+}
+
+// certConfig builds a config for a single certificate whose artefacts live in dir.
+func certConfig(baseURL string, dir string, name string) *configuration.ConfigFileData {
+	return &configuration.ConfigFileData{
+		BaseURL: baseURL,
+		Certificates: []configuration.CertificateData{
+			{
+				Name:              name,
+				CertificateSecret: "cert-secret",
+				CertificatePath:   filepath.Join(dir, "cert.pem"),
+				KeySecret:         "key-secret",
+				KeyPath:           filepath.Join(dir, "key.pem"),
+				CaPath:            filepath.Join(dir, "ca.pem"),
+			},
+		},
+	}
+}
+
+// TestHandleCertificatesKeepsOldCertificateWhenKeyFetchFails is the regression
+// guard for #28.
+//
+// A certificate and its key only work as a pair. Rolling the certificate out on
+// its own and then failing on the key used to leave the new certificate next to
+// the old, non-matching key: nothing broke during that run, because nothing
+// reloaded, but the next unrelated restart of the TLS server hours or days
+// later picked up the mismatched pair and fell over.
+//
+// So when the key cannot be fetched, the certificate on disk must still be the
+// old one, byte for byte.
+func TestHandleCertificatesKeepsOldCertificateWhenKeyFetchFails(t *testing.T) {
+	t.Cleanup(func() {
+		configuration.DryRun = false
+		configuration.Force = false
+	})
+
+	const oldCert = "old-cert-body"
+	const oldKey = "old-key-body-matching-old-cert"
+
+	// the key is missing from the served artefacts, so it answers 500
+	server := startArtefactServer(t, map[FileType]string{
+		CertificateFile:   "new-cert-body",
+		CaCertificateFile: "new-ca-body",
+	})
+
+	dir := t.TempDir()
+	config := certConfig(server.URL, dir, "example.com")
+	certPath := config.Certificates[0].CertificatePath
+	keyPath := config.Certificates[0].KeyPath
+
+	seedFile(t, certPath, oldCert, 0644)
+	seedFile(t, keyPath, oldKey, 0600)
+
+	result := HandleCertificates(testLogger(), config)
+
+	// the actual point of #28: the pair on disk is still the matching old one
+	assertFileContents(t, certPath, oldCert)
+	assertFileContents(t, keyPath, oldKey)
+
+	if _, err := os.Stat(config.Certificates[0].CaPath); !os.IsNotExist(err) {
+		t.Fatalf("expected CA to not be deployed either, got err=%v", err)
+	}
+
+	assertSingleFailure(t, result, "example.com", KeyFile)
+	assertNoTempFiles(t, dir)
+
+	if len(result.Changed) != 0 {
+		t.Fatalf("expected no certificate to be reported as changed: got %v", result.Changed)
+	}
+}
+
+// TestHandleCertificatesKeepsOldCertificateAndKeyWhenCaFetchFails generalises
+// the guard above to a failure in the last artefact: the two that were fetched
+// successfully before it must not be published either.
+func TestHandleCertificatesKeepsOldCertificateAndKeyWhenCaFetchFails(t *testing.T) {
+	t.Cleanup(func() {
+		configuration.DryRun = false
+		configuration.Force = false
+	})
+
+	const oldCert = "old-cert-body"
+	const oldKey = "old-key-body"
+	const oldCa = "old-ca-body"
+
+	server := startArtefactServer(t, map[FileType]string{
+		CertificateFile: "new-cert-body",
+		KeyFile:         "new-key-body",
+	})
+
+	dir := t.TempDir()
+	config := certConfig(server.URL, dir, "example.com")
+
+	seedFile(t, config.Certificates[0].CertificatePath, oldCert, 0644)
+	seedFile(t, config.Certificates[0].KeyPath, oldKey, 0600)
+	seedFile(t, config.Certificates[0].CaPath, oldCa, 0644)
+
+	result := HandleCertificates(testLogger(), config)
+
+	assertFileContents(t, config.Certificates[0].CertificatePath, oldCert)
+	assertFileContents(t, config.Certificates[0].KeyPath, oldKey)
+	assertFileContents(t, config.Certificates[0].CaPath, oldCa)
+
+	assertSingleFailure(t, result, "example.com", CaCertificateFile)
+	assertNoTempFiles(t, dir)
+}
+
+// TestHandleCertificatesLeavesNoTemporaryFilesOnAbort makes sure an aborted
+// rollout cleans up after itself: the certificate and CA were fully staged
+// before the key failed, and both staged files have to be gone afterwards.
+func TestHandleCertificatesLeavesNoTemporaryFilesOnAbort(t *testing.T) {
+	t.Cleanup(func() {
+		configuration.DryRun = false
+		configuration.Force = false
+	})
+
+	server := startArtefactServer(t, map[FileType]string{
+		CertificateFile:   "new-cert-body",
+		CaCertificateFile: "new-ca-body",
+	})
+
+	dir := t.TempDir()
+	config := certConfig(server.URL, dir, "example.com")
+
+	result := HandleCertificates(testLogger(), config)
+
+	assertSingleFailure(t, result, "example.com", KeyFile)
+	assertNoTempFiles(t, dir)
+
+	// nothing at all was published for this certificate
+	for _, path := range []string{
+		config.Certificates[0].CertificatePath,
+		config.Certificates[0].KeyPath,
+		config.Certificates[0].CaPath,
+	} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("expected %s to be absent after an aborted rollout, got err=%v", path, err)
+		}
+	}
+}
+
+// TestHandleCertificatesFailedCertificateDoesNotBlockNextOne pins the "record,
+// do not abort" behaviour to the two-phase rollout: a certificate that aborts
+// must not keep the next one from being committed.
+func TestHandleCertificatesFailedCertificateDoesNotBlockNextOne(t *testing.T) {
+	t.Cleanup(func() {
+		configuration.DryRun = false
+		configuration.Force = false
+	})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "broken.example.com") && strings.HasPrefix(r.URL.Path, constants.KeyApiPath) {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		_, _ = w.Write([]byte("body-" + filepath.Base(r.URL.Path)))
+	}))
+	defer server.Close()
+
+	brokenDir := t.TempDir()
+	healthyDir := t.TempDir()
+
+	broken := certConfig(server.URL, brokenDir, "broken.example.com")
+	healthy := certConfig(server.URL, healthyDir, "healthy.example.com")
+	config := &configuration.ConfigFileData{
+		BaseURL:      server.URL,
+		Certificates: []configuration.CertificateData{broken.Certificates[0], healthy.Certificates[0]},
+	}
+
+	result := HandleCertificates(testLogger(), config)
+
+	assertSingleFailure(t, result, "broken.example.com", KeyFile)
+	assertNoTempFiles(t, brokenDir)
+	assertNoTempFiles(t, healthyDir)
+
+	if len(result.Changed) != 1 || result.Changed[0] != "healthy.example.com" {
+		t.Fatalf("unexpected changed certificates: got %v", result.Changed)
+	}
+
+	assertFileContents(t, healthy.Certificates[0].CertificatePath, "body-healthy.example.com")
+	assertFileContents(t, healthy.Certificates[0].KeyPath, "body-healthy.example.com")
+	assertFileContents(t, healthy.Certificates[0].CaPath, "body-healthy.example.com")
+}
+
+// TestHandleCertificatesDryRunStagesNothing checks that a dry run prepares and
+// reports the rollout without touching the disk, and without leaving staged
+// files behind.
+func TestHandleCertificatesDryRunStagesNothing(t *testing.T) {
+	t.Cleanup(func() {
+		configuration.DryRun = false
+		configuration.Force = false
+	})
+	configuration.DryRun = true
+
+	const oldCert = "old-cert-body"
+
+	server := startArtefactServer(t, map[FileType]string{
+		CertificateFile:   "new-cert-body",
+		KeyFile:           "new-key-body",
+		CaCertificateFile: "new-ca-body",
+	})
+
+	dir := t.TempDir()
+	config := certConfig(server.URL, dir, "example.com")
+	seedFile(t, config.Certificates[0].CertificatePath, oldCert, 0644)
+
+	result := HandleCertificates(testLogger(), config)
+
+	assertFileContents(t, config.Certificates[0].CertificatePath, oldCert)
+	assertNoTempFiles(t, dir)
+
+	for _, path := range []string{config.Certificates[0].KeyPath, config.Certificates[0].CaPath} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("expected %s to be absent after a dry run, got err=%v", path, err)
+		}
+	}
+
+	// a dry run still reports what it would have done
+	if len(result.Changed) != 1 || result.Changed[0] != "example.com" {
+		t.Fatalf("expected the dry run to report the certificate as changed: got %v", result.Changed)
+	}
+
+	if result.ExitCode() != ExitSuccess {
+		t.Fatalf("unexpected exit code: got %d want %d", result.ExitCode(), ExitSuccess)
+	}
+}
+
+// TestHandleCertificatesForceDeploysUnchangedCertificate checks that --force
+// still commits identical content and still triggers the action.
+func TestHandleCertificatesForceDeploysUnchangedCertificate(t *testing.T) {
+	t.Cleanup(func() {
+		configuration.DryRun = false
+		configuration.Force = false
+	})
+
+	bodies := map[FileType]string{
+		CertificateFile:   "stable-cert-body",
+		KeyFile:           "stable-key-body",
+		CaCertificateFile: "stable-ca-body",
+	}
+	server := startArtefactServer(t, bodies)
+
+	dir := t.TempDir()
+	config := certConfig(server.URL, dir, "example.com")
+
+	// seed exactly what the server serves, so nothing needs a rollout
+	seedFile(t, config.Certificates[0].CertificatePath, bodies[CertificateFile], 0644)
+	seedFile(t, config.Certificates[0].KeyPath, bodies[KeyFile], 0600)
+	seedFile(t, config.Certificates[0].CaPath, bodies[CaCertificateFile], 0644)
+
+	marker := filepath.Join(t.TempDir(), "action-ran")
+	config.Certificates[0].Action = "/usr/bin/touch " + marker
+
+	withoutForce := HandleCertificates(testLogger(), config)
+	if len(withoutForce.Unchanged) != 1 {
+		t.Fatalf("expected the certificate to be reported as unchanged: got %v", withoutForce.Unchanged)
+	}
+
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("expected no action to run without --force, got err=%v", err)
+	}
+
+	configuration.Force = true
+	forced := HandleCertificates(testLogger(), config)
+
+	if len(forced.Changed) != 1 || forced.Changed[0] != "example.com" {
+		t.Fatalf("expected --force to report the certificate as changed: got %v", forced.Changed)
+	}
+
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("expected --force to run the action: %v", err)
+	}
+
+	assertFileContents(t, config.Certificates[0].CertificatePath, bodies[CertificateFile])
+	assertFileContents(t, config.Certificates[0].KeyPath, bodies[KeyFile])
+	assertNoTempFiles(t, dir)
+}
+
+// TestHandleCertificatesPreservesFileModeAcrossRollout guards that going
+// through a temporary file does not widen the permissions of a private key.
+func TestHandleCertificatesPreservesFileModeAcrossRollout(t *testing.T) {
+	t.Cleanup(func() {
+		configuration.DryRun = false
+		configuration.Force = false
+	})
+
+	server := startArtefactServer(t, map[FileType]string{
+		CertificateFile:   "new-cert-body",
+		KeyFile:           "new-key-body",
+		CaCertificateFile: "new-ca-body",
+	})
+
+	dir := t.TempDir()
+	config := certConfig(server.URL, dir, "example.com")
+
+	seedFile(t, config.Certificates[0].CertificatePath, "old-cert-body", 0644)
+	seedFile(t, config.Certificates[0].KeyPath, "old-key-body", 0600)
+
+	result := HandleCertificates(testLogger(), config)
+
+	if len(result.Failed) != 0 {
+		t.Fatalf("unexpected failures: %v", result.Failed)
+	}
+
+	assertFileContents(t, config.Certificates[0].KeyPath, "new-key-body")
+	assertFileMode(t, config.Certificates[0].KeyPath, 0600)
+	assertFileContents(t, config.Certificates[0].CertificatePath, "new-cert-body")
+	assertFileMode(t, config.Certificates[0].CertificatePath, 0644)
+	assertNoTempFiles(t, dir)
+}
+
+func assertFileMode(t *testing.T, path string, want os.FileMode) {
+	t.Helper()
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("failed to stat %s: %v", path, err)
+	}
+
+	if info.Mode().Perm() != want {
+		t.Fatalf("unexpected mode of %s: got %o want %o", path, info.Mode().Perm(), want)
 	}
 }

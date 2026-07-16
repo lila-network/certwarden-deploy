@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     and exits non-zero now, so a previously green timer may start alerting.
 
 - post-rollout action output is no longer discarded, stdout/stderr and the exit code are now logged (#26)
+- A certificate and its key are now rolled out as a unit: if any artefact fails, none of them are written, so a new certificate can no longer end up next to the old key (#28)
 
 ## [0.2.4] - 2025-07-09
 

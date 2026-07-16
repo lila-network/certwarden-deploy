@@ -36,6 +36,12 @@ type GenericCertificate struct {
 
 	// Bytes fetched from disk
 	diskBytes []byte
+
+	// tempPath is the fully written and fsynced file staged by Prepare that has
+	// not been renamed into place yet. It is empty whenever nothing is staged:
+	// an artefact that was never prepared, one that needed no rollout, one that
+	// was already committed and one that was aborted all leave it empty.
+	tempPath string
 }
 
 // Exit codes returned by a certwarden-deploy run. They form a public contract

@@ -449,3 +449,55 @@ func TestCLI_DryRunExitsTwoOnFetchFailure(t *testing.T) {
 		t.Fatalf("expected no file to be written during dry-run, got err=%v", err)
 	}
 }
+
+// TestCLI_FailingKeyLeavesOldCertificateOnDisk is the end-to-end guard for #28.
+//
+// A certificate is only usable next to the key it was issued for, so a run that
+// cannot fetch the key must leave the pair on disk exactly as it found it. The
+// old behaviour deployed the certificate first and bailed out on the key, which
+// left a mismatched pair that only surfaced on the next unrelated restart of
+// the TLS server.
+func TestCLI_FailingKeyLeavesOldCertificateOnDisk(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, constants.KeyApiPath) {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		_, _ = w.Write([]byte("new-body-" + path.Base(r.URL.Path)))
+	}))
+	defer server.Close()
+
+	tmpDir := t.TempDir()
+	binaryPath := buildBinary(t)
+
+	cert := newE2ECert(tmpDir, "example.com")
+	certDir := filepath.Dir(cert.certPath)
+	if err := os.MkdirAll(certDir, 0755); err != nil {
+		t.Fatalf("failed to create certificate directory: %v", err)
+	}
+
+	writeFile(t, cert.certPath, "old-cert-body")
+	writeFile(t, cert.keyPath, "old-key-body")
+
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	writeE2EConfig(t, configPath, server.URL, cert)
+
+	runBinaryExpectingExitCode(t, 2, binaryPath, "-c", configPath)
+
+	assertFileContents(t, cert.certPath, "old-cert-body")
+	assertFileContents(t, cert.keyPath, "old-key-body")
+
+	if _, err := os.Stat(cert.caPath); !os.IsNotExist(err) {
+		t.Fatalf("expected CA to not be deployed, got err=%v", err)
+	}
+
+	// the aborted rollout must not litter the target directory either
+	leftovers, err := filepath.Glob(filepath.Join(certDir, ".certwarden-deploy-*"))
+	if err != nil {
+		t.Fatalf("failed to glob for temporary files: %v", err)
+	}
+
+	if len(leftovers) != 0 {
+		t.Fatalf("temporary files left behind in %s: %v", certDir, leftovers)
+	}
+}

@@ -32,70 +32,23 @@ func HandleCertificates(logger *slog.Logger, config *configuration.ConfigFileDat
 	result := RunResult{}
 
 	for _, cert := range config.Certificates {
-		certInfos := GenericCertificate{
-			Name:     cert.Name,
-			FilePath: cert.CertificatePath,
-			Secret:   cert.CertificateSecret,
-			Type:     CertificateFile,
-		}
-
-		keyInfos := GenericCertificate{
-			Name:     cert.Name,
-			FilePath: cert.KeyPath,
-			Secret:   cert.KeySecret,
-			Type:     KeyFile,
-		}
-
-		caInfos := GenericCertificate{
-			Name:     cert.Name,
-			FilePath: cert.CaPath,
-			Secret:   cert.CertificateSecret,
-			Type:     CaCertificateFile,
-		}
-
-		// Rollout Certificate
-		certOnDiskChanged, err := certInfos.Rollout(logger, config.BaseURL, config.DisableCertificateValidation)
-		if err != nil {
-			logger.Error(
-				"Failed to roll out Certificate", "path",
-				certInfos.FilePath, "name", cert.Name, "error", err,
-			)
-			result.Failed = append(result.Failed, CertFailure{Name: cert.Name, Type: certInfos.Type, Err: err})
-			continue
-		}
-
-		// Rollout Key
-		keyOnDiskChanged, err := keyInfos.Rollout(logger, config.BaseURL, config.DisableCertificateValidation)
-		if err != nil {
-			logger.Error(
-				"Failed to roll out Key", "path",
-				keyInfos.FilePath, "name", cert.Name, "error", err,
-			)
-			result.Failed = append(result.Failed, CertFailure{Name: cert.Name, Type: keyInfos.Type, Err: err})
-			continue
-		}
-
-		caOnDiskChanged, err := caInfos.Rollout(logger, config.BaseURL, config.DisableCertificateValidation)
-		if err != nil {
-			logger.Error(
-				"failed to roll out CA", "path",
-				caInfos.FilePath, "name", cert.Name, "error", err,
-			)
-			result.Failed = append(result.Failed, CertFailure{Name: cert.Name, Type: caInfos.Type, Err: err})
+		onDiskChanged, failure := rolloutCertificate(logger, config, cert)
+		if failure != nil {
+			result.Failed = append(result.Failed, *failure)
 			continue
 		}
 
 		// Everything this certificate needed is on disk, so classify it.
-		// New is intentionally never filled here: Rollout cannot tell a first
+		// New is intentionally never filled here: Prepare cannot tell a first
 		// deployment from an update yet, see RunResult.New and #31.
-		if certOnDiskChanged || keyOnDiskChanged || caOnDiskChanged {
+		if onDiskChanged {
 			result.Changed = append(result.Changed, cert.Name)
 		} else {
 			result.Unchanged = append(result.Unchanged, cert.Name)
 		}
 
 		// if cert OR key changed OR --force
-		if (certOnDiskChanged || keyOnDiskChanged || caOnDiskChanged) || configuration.Force {
+		if onDiskChanged || configuration.Force {
 			if configuration.DryRun {
 				// Actions never run during --dry-run, so they can never fail
 				// here and exit code 3 is unreachable in a dry run. A fetch
@@ -109,7 +62,7 @@ func HandleCertificates(logger *slog.Logger, config *configuration.ConfigFileDat
 				logger.Info("Forcing file system change due to --force", "name", cert.Name)
 			}
 
-			err = handleCertificateAction(logger, cert.Action)
+			err := handleCertificateAction(logger, cert.Action)
 			if err != nil {
 				logger.Error("Failed to execute post-rollout action", "name", cert.Name, "error", err)
 				result.ActionFailed = append(result.ActionFailed, ActionFailure{Name: cert.Name, Err: err})
@@ -120,11 +73,115 @@ func HandleCertificates(logger *slog.Logger, config *configuration.ConfigFileDat
 	return result
 }
 
-// Rollout handles getting the certificate/key data from the
-// server and writing it to disk if the data differs.
+// artefactsOf splits a configured certificate into the individual files it is
+// made of. They are deployed as one unit: a certificate is only usable next to
+// the key it was issued for.
+func artefactsOf(cert configuration.CertificateData) []*GenericCertificate {
+	return []*GenericCertificate{
+		{
+			Name:     cert.Name,
+			FilePath: cert.CertificatePath,
+			Secret:   cert.CertificateSecret,
+			Type:     CertificateFile,
+		},
+		{
+			Name:     cert.Name,
+			FilePath: cert.KeyPath,
+			Secret:   cert.KeySecret,
+			Type:     KeyFile,
+		},
+		{
+			Name:     cert.Name,
+			FilePath: cert.CaPath,
+			Secret:   cert.CertificateSecret,
+			Type:     CaCertificateFile,
+		},
+	}
+}
+
+// rolloutCertificate deploys all artefacts of a single certificate as one unit,
+// in two phases (#28).
 //
-// Returns error on error, true if certificate action needs to be executed, false if not
-func (c *GenericCertificate) Rollout(logger *slog.Logger, baseUrl string, skipInsecure bool) (bool, error) {
+// Rolling the artefacts out one by one used to leave a new certificate next to
+// the old, non-matching key whenever the key fetch failed after the certificate
+// had already been renamed into place. Nothing broke at that moment, because
+// nothing reloaded, but the next unrelated restart of the TLS server picked up
+// the mismatched pair and failed hours or days after the run that caused it.
+//
+// So: phase 1 fetches every artefact and stages it as a temporary file next to
+// its target, and phase 2 only renames anything once every artefact of this
+// certificate made it through phase 1. If any of them fails, phase 2 never
+// starts and every staged file is discarded, leaving the certificate exactly as
+// it was.
+//
+// The renames in phase 2 are not atomic as a group: POSIX cannot rename several
+// files in one step, so this is not a transaction. What it does is shrink the
+// window in which the pair can be inconsistent from seconds of network I/O to
+// the microseconds between two renames, and remove the failure mode above
+// entirely: by phase 2 all data has been fetched, written and fsynced, so a
+// rename can realistically only still fail if the filesystem itself is broken.
+//
+// Returns whether any artefact was written and a failure to record, if any.
+func rolloutCertificate(
+	logger *slog.Logger,
+	config *configuration.ConfigFileData,
+	cert configuration.CertificateData,
+) (bool, *CertFailure) {
+	artefacts := artefactsOf(cert)
+
+	// Phase 2' (abort): discard whatever is still staged when this returns.
+	// Abort is a no-op for an artefact that staged nothing and for one that was
+	// committed, so on the happy path this does nothing.
+	defer func() {
+		for _, artefact := range artefacts {
+			artefact.Abort(logger)
+		}
+	}()
+
+	// Phase 1 (prepare): fetch and stage every artefact. Nothing that a TLS
+	// server could pick up changes here.
+	onDiskChanged := false
+	for _, artefact := range artefacts {
+		artefactChanged, err := artefact.Prepare(logger, config.BaseURL, config.DisableCertificateValidation)
+		if err != nil {
+			logger.Error(
+				"Failed to roll out certificate", "path", artefact.FilePath,
+				"name", cert.Name, "file-type", artefact.Type, "error", err,
+			)
+			return false, &CertFailure{Name: cert.Name, Type: artefact.Type, Err: err}
+		}
+
+		onDiskChanged = onDiskChanged || artefactChanged
+	}
+
+	// Phase 2 (commit): every artefact is fetched and on disk, publish them.
+	for _, artefact := range artefacts {
+		if err := artefact.Commit(logger); err != nil {
+			logger.Error(
+				"Failed to commit certificate", "path", artefact.FilePath,
+				"name", cert.Name, "file-type", artefact.Type, "error", err,
+			)
+			return false, &CertFailure{Name: cert.Name, Type: artefact.Type, Err: err}
+		}
+	}
+
+	return onDiskChanged, nil
+}
+
+// Prepare is phase 1 of a rollout: it fetches the artefact from the server,
+// compares it to what is on disk and, if it differs (or --force is set), stages
+// the new content as a fully written and fsynced temporary file next to the
+// target. It deliberately stops short of the rename, so a caller can still walk
+// away from the whole certificate without having touched it.
+//
+// The staged file is handed over to Commit or Abort through c.tempPath, which
+// is set as soon as the temporary file exists. Every error path out of Prepare
+// therefore leaves the file recorded and removable, never orphaned.
+//
+// Returns error on error, true if the artefact was staged for deployment, false
+// if it is already up to date.
+func (c *GenericCertificate) Prepare(logger *slog.Logger, baseUrl string, skipInsecure bool) (bool, error) {
+	// An artefact nobody configured is not deployed at all, not even staged.
 	if c.FilePath == "" {
 		logger.Info("File path is empty, skipping...", "file-type", c.Type)
 		return false, nil
@@ -144,27 +201,73 @@ func (c *GenericCertificate) Rollout(logger *slog.Logger, baseUrl string, skipIn
 		return false, fmt.Errorf("failed to check certificate on disk: %w", err)
 	}
 
-	if fileNeedsRollout || configuration.Force {
-		if configuration.Force {
-			logger.Info("Forcing file system change due to --force", "name", c.Name)
-		}
-
-		err = c.writeToDisk(logger)
-		if err != nil {
-			return false, fmt.Errorf("failed to handle certificate: %w", err)
-		}
-
-	}
-	if fileNeedsRollout {
-		logger.Info("New file deployed", "path", c.FilePath)
-		return true, nil
-	} else if configuration.Force {
-		logger.Info("File deployed", "path", c.FilePath)
-		return true, nil
-	} else {
+	if !fileNeedsRollout && !configuration.Force {
 		logger.Info("File not changed, skipping...", "path", c.FilePath)
 		return false, nil
 	}
+
+	if configuration.Force {
+		logger.Info("Forcing file system change due to --force", "name", c.Name)
+	}
+
+	if configuration.DryRun {
+		// A dry run stages nothing, so there is nothing for Commit to publish
+		// or for Abort to remove.
+		logger.Info("DRY-RUN: skipping file write", "path", c.FilePath, "file-type", c.Type)
+		return true, nil
+	}
+
+	if err := c.writeTempFile(logger); err != nil {
+		return false, fmt.Errorf("failed to handle certificate: %w", err)
+	}
+
+	return true, nil
+}
+
+// Commit is phase 2 of a rollout: it renames the staged file over the target,
+// which is the point where the new content becomes visible to everything else
+// on the machine. A single rename is atomic, so no reader ever sees a partial
+// file.
+//
+// Committing an artefact that staged nothing is a no-op, so it can be called
+// for every artefact of a certificate unconditionally.
+//
+// Returns error or nil on success.
+func (c *GenericCertificate) Commit(logger *slog.Logger) error {
+	if c.tempPath == "" {
+		return nil
+	}
+
+	if err := os.Rename(c.tempPath, c.FilePath); err != nil {
+		return fmt.Errorf("failed to replace target file with temporary file: %w", err)
+	}
+
+	// handed over to the filesystem, there is nothing left for Abort to remove
+	c.tempPath = ""
+
+	logger.Info("New file deployed", "path", c.FilePath, "file-type", c.Type)
+	return nil
+}
+
+// Abort is phase 2' of a rollout: it throws the staged file away and leaves the
+// target untouched.
+//
+// It is a no-op for an artefact that staged nothing and for one that was
+// already committed, so it is safe to defer for every artefact of a
+// certificate. A failure to remove the temporary file is logged rather than
+// returned: the run has already decided not to deploy this certificate, and a
+// leftover file in the target directory must not turn into a second failure.
+func (c *GenericCertificate) Abort(logger *slog.Logger) {
+	if c.tempPath == "" {
+		return
+	}
+
+	if err := os.Remove(c.tempPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		logger.Error("failed to clean up temporary file", "path", c.tempPath, "error", err)
+	}
+
+	logger.Debug("Discarded staged file", "path", c.FilePath, "temp-path", c.tempPath)
+	c.tempPath = ""
 }
 
 // readFromDisk reads file data from disk and populates the data []byte field.
@@ -211,15 +314,21 @@ func (c *GenericCertificate) needsRollout(logger *slog.Logger) (bool, error) {
 	return hashesAreDifferent, nil
 }
 
-// writeToDisk flushes the certificate data to disk.
+// tempFilePattern is the os.CreateTemp pattern for staged files. The leading
+// dot keeps them out of the way of shell globs while they exist, and the fixed
+// prefix makes leftovers from a killed run recognisable.
+const tempFilePattern = ".certwarden-deploy-*"
+
+// writeTempFile stages the certificate data as a temporary file next to its
+// target: it writes, chmods and fsyncs the new content, but does not publish
+// it. Committing the result is up to Commit.
+//
+// The temporary file is created in the target directory rather than in the
+// system temp dir, so that the rename in Commit stays inside one filesystem
+// and is therefore atomic.
 //
 // Returns error or nil on success.
-func (c *GenericCertificate) writeToDisk(logger *slog.Logger) error {
-	if configuration.DryRun {
-		logger.Debug("DRY-RUN: writing data to file", "path", c.FilePath)
-		return nil
-	}
-
+func (c *GenericCertificate) writeTempFile(logger *slog.Logger) error {
 	dir := filepath.Dir(c.FilePath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("failed to create parent directory: %w", err)
@@ -232,48 +341,44 @@ func (c *GenericCertificate) writeToDisk(logger *slog.Logger) error {
 		return fmt.Errorf("failed to inspect file before writing: %w", err)
 	}
 
-	file, err := os.CreateTemp(dir, ".certwarden-deploy-*")
+	file, err := os.CreateTemp(dir, tempFilePattern)
 	if err != nil {
 		return fmt.Errorf("failed to open temporary file for writing: %w", err)
 	}
 
-	tempPath := file.Name()
-	cleanupTempFile := true
-	defer func(l *slog.Logger) {
-		if cleanupTempFile {
-			if removeErr := os.Remove(tempPath); removeErr != nil && !errors.Is(removeErr, fs.ErrNotExist) {
-				l.Error("failed to clean up temporary file", "path", tempPath, "error", removeErr)
-			}
+	// From here on the file belongs to the abort guard in rolloutCertificate:
+	// every path out of this function leaves it recorded in tempPath, so it is
+	// removed unless it gets committed.
+	c.tempPath = file.Name()
+
+	closeAfterError := func(stage string) {
+		if closeErr := file.Close(); closeErr != nil {
+			logger.Error(
+				"failed to close temporary file after error", "path", c.tempPath,
+				"stage", stage, "error", closeErr,
+			)
 		}
-	}(logger)
+	}
 
 	if err := file.Chmod(mode); err != nil {
-		if closeErr := file.Close(); closeErr != nil {
-			logger.Error("failed to close temporary file after chmod error", "path", tempPath, "error", closeErr)
-		}
+		closeAfterError("chmod")
 		return fmt.Errorf("failed to set temporary file permissions: %w", err)
 	}
 
 	w := bufio.NewWriter(file)
 
 	if _, err := w.Write(c.serverBytes); err != nil {
-		if closeErr := file.Close(); closeErr != nil {
-			logger.Error("failed to close temporary file after write error", "path", tempPath, "error", closeErr)
-		}
+		closeAfterError("write")
 		return fmt.Errorf("failed to write data to file: %w", err)
 	}
 
 	if err = w.Flush(); err != nil {
-		if closeErr := file.Close(); closeErr != nil {
-			logger.Error("failed to close temporary file after flush error", "path", tempPath, "error", closeErr)
-		}
+		closeAfterError("flush")
 		return fmt.Errorf("failed to flush data to file: %w", err)
 	}
 
 	if err = file.Sync(); err != nil {
-		if closeErr := file.Close(); closeErr != nil {
-			logger.Error("failed to close temporary file after sync error", "path", tempPath, "error", closeErr)
-		}
+		closeAfterError("sync")
 		return fmt.Errorf("failed to sync data to file: %w", err)
 	}
 
@@ -281,12 +386,7 @@ func (c *GenericCertificate) writeToDisk(logger *slog.Logger) error {
 		return fmt.Errorf("failed to close temporary file: %w", err)
 	}
 
-	if err = os.Rename(tempPath, c.FilePath); err != nil {
-		return fmt.Errorf("failed to replace target file with temporary file: %w", err)
-	}
-
-	cleanupTempFile = false
-	logger.Debug("Successfully wrote to file", "path", c.FilePath)
+	logger.Debug("Successfully staged file", "path", c.FilePath, "temp-path", c.tempPath)
 	return nil
 }
 
