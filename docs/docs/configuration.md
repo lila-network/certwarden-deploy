@@ -9,7 +9,12 @@ weight: 20
 
 The binary accepts the following flags:
 
-- `-c, --config`: path to the YAML config file. Default: `/etc/certwarden-deploy/config.yaml`
+- `-c, --config`: path to the YAML config file. If not set, the first existing of these locations is used:
+    1. `./certwarden-deploy.yaml`
+    2. `$XDG_CONFIG_HOME/certwarden-deploy/config.yaml`, or `~/.config/certwarden-deploy/config.yaml` if `XDG_CONFIG_HOME` is unset
+    3. `/etc/certwarden-deploy/config.yaml`
+
+    If none of them exists, the tool exits with an error listing every path it searched. Setting `--config` explicitly disables the search: that file is used as-is and it is an error if it does not exist.
 - `-d, --dry-run`: show what would change without writing files. This also enables debug logging
 - `-f, --force`: write files and run actions even if the content on disk is unchanged
 - `-q, --quiet`: only print errors

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"log/slog"
 	"os"
 
@@ -24,9 +25,31 @@ For more information on how to configure this tool, visit the docs at https://ce
 	Run:               handleRootCmd,
 }
 
+// resolveConfigPath determines which config file to load. An explicitly set
+// --config is always used verbatim, only an unset flag triggers a search of the
+// default locations.
+func resolveConfigPath(cmd *cobra.Command) (string, error) {
+	if cmd.Flags().Changed("config") {
+		return configuration.ConfigFile, nil
+	}
+
+	path, err := configuration.DiscoverConfigFile()
+	if err != nil {
+		return "", fmt.Errorf("failed to discover config file: %w", err)
+	}
+
+	return path, nil
+}
+
 func handleRootCmd(cmd *cobra.Command, args []string) {
+	configPath, err := resolveConfigPath(cmd)
+	if err != nil {
+		slog.Error("failed to initialize config", "error", err)
+		os.Exit(1)
+	}
+
 	cl := configuration.FileConfigLoader{
-		Path: configuration.ConfigFile,
+		Path: configPath,
 	}
 	config, err := configuration.GetConfig(&cl)
 	if err != nil {
