@@ -11,9 +11,14 @@ func (c *ConfigFileData) SubstituteKeys(logger *slog.Logger) {
 		c.Certificates[index].KeyPath = strings.ReplaceAll(cert.KeyPath, "{name}", c.Certificates[index].Name)
 		c.Certificates[index].CaPath = strings.ReplaceAll(cert.CaPath, "{name}", c.Certificates[index].Name)
 
-		c.Certificates[index].Action = strings.ReplaceAll(cert.Action, "{name}", c.Certificates[index].Name)
-		c.Certificates[index].Action = strings.ReplaceAll(c.Certificates[index].Action, "{cert_path}", c.Certificates[index].CertificatePath)
-		c.Certificates[index].Action = strings.ReplaceAll(c.Certificates[index].Action, "{key_path}", c.Certificates[index].KeyPath)
-		c.Certificates[index].Action = strings.ReplaceAll(c.Certificates[index].Action, "{ca_path}", c.Certificates[index].CaPath)
+		// The paths above are already substituted at this point, so the path
+		// placeholders below expand to the final on-disk paths.
+		c.Certificates[index].Action = cert.Action.substitute(func(s string) string {
+			s = strings.ReplaceAll(s, "{name}", c.Certificates[index].Name)
+			s = strings.ReplaceAll(s, "{cert_path}", c.Certificates[index].CertificatePath)
+			s = strings.ReplaceAll(s, "{key_path}", c.Certificates[index].KeyPath)
+			s = strings.ReplaceAll(s, "{ca_path}", c.Certificates[index].CaPath)
+			return s
+		})
 	}
 }

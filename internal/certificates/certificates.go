@@ -54,7 +54,7 @@ func HandleCertificates(logger *slog.Logger, config *configuration.ConfigFileDat
 				// here and exit code 3 is unreachable in a dry run. A fetch
 				// failure above is different: that request really was made and
 				// really did fail, so it is recorded and still yields exit 2.
-				logger.Info("DRY-RUN: skipping post-rollout action", "name", cert.Name, "command", cert.Action)
+				logger.Info("DRY-RUN: skipping post-rollout action", "name", cert.Name, "command", cert.Action.String())
 				continue
 			}
 
@@ -581,17 +581,41 @@ func (b *boundedBuffer) String() string {
 	return out
 }
 
+// actionCommand turns an Action into the command to execute.
+//
+// The two YAML forms map onto two very different executions, and this is the
+// only place that difference exists:
+//
+//   - list form: exec the binary directly, arguments are passed through
+//     verbatim and no shell ever sees them
+//   - string form: hand the whole string to `sh -c`, so operators, quoting and
+//     redirects mean what the user wrote
+//
+// Reports false when there is nothing to run.
+func actionCommand(action configuration.Action) (*exec.Cmd, bool) {
+	if action.IsEmpty() {
+		return nil, false
+	}
+
+	if len(action.Args) > 0 {
+		return exec.Command(action.Args[0], action.Args[1:]...), true
+	}
+
+	return exec.Command(configuration.ShellPath, "-c", action.Command), true
+}
+
 // handleCertificateAction executes the user-defined action after successful certificate deployment
-func handleCertificateAction(logger *slog.Logger, action string) error {
-	sargs := strings.Fields(action)
-	if len(sargs) == 0 {
+func handleCertificateAction(logger *slog.Logger, certAction configuration.Action) error {
+	cmd, runnable := actionCommand(certAction)
+	if !runnable {
 		return nil
 	}
+
+	action := certAction.String()
 
 	stdout := &boundedBuffer{limit: maxActionOutputBytes}
 	stderr := &boundedBuffer{limit: maxActionOutputBytes}
 
-	cmd := exec.Command(sargs[0], sargs[1:]...)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 

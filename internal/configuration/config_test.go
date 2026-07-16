@@ -114,8 +114,8 @@ certificates:
 		t.Fail()
 	}
 
-	if configAction != data.Certificates[0].Action {
-		t.Logf("Certificates.Action: expected %v, got %v", configAction, data.Certificates[0].Action)
+	if configAction != data.Certificates[0].Action.Command {
+		t.Logf("Certificates.Action: expected %v, got %v", configAction, data.Certificates[0].Action.Command)
 		t.Fail()
 	}
 

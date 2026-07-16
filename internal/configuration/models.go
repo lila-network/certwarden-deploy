@@ -35,7 +35,7 @@ type CertificateData struct {
 	KeySecret         string `yaml:"key_secret"`
 	KeyPath           string `yaml:"key_path"`
 	CaPath            string `yaml:"ca_path"`
-	Action            string `yaml:"action"`
+	Action            Action `yaml:"action"`
 }
 
 type ConfigValidationError struct {

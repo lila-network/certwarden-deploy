@@ -95,11 +95,20 @@ If this value is left empty, CA chain rollout is skipped for that certificate.
 
 Optional. Command to run after a rollout changed any managed file for that certificate, or when `--force` is used.
 
-Typical example:
+It accepts two forms, see [Action Command Semantics](#action-command-semantics):
 
 ```yaml
-action: "/usr/bin/systemctl reload caddy"
+# string form: run through /bin/sh
+action: "cp {cert_path} /etc/ssl/ && systemctl reload nginx"
+
+# list form: executed directly, no shell
+action:
+  - /usr/bin/systemctl
+  - reload
+  - nginx
 ```
+
+If the key is present it must not be blank: an `action` that is an empty string, a whitespace-only string, or an empty list is rejected at startup. Leave the key out entirely if no command should run.
 
 ## Placeholders
 
@@ -111,6 +120,8 @@ Available placeholders:
 - `{cert_path}`: available in `action`
 - `{key_path}`: available in `action`
 - `{ca_path}`: available in `action`
+
+In the list form of `action`, placeholders are substituted in every item individually, so an item may be a placeholder on its own.
 
 Example:
 
@@ -133,25 +144,42 @@ After substitution, the action above becomes:
 
 ## Action Command Semantics
 
-The `action` field is executed directly without a shell.
+`action` accepts two forms, and the form decides how the command is executed.
 
-That has a few important consequences:
+### String form
 
-- shell features such as pipes, redirects, globbing, and environment-variable expansion are not available
-- quoting is not interpreted by a shell
-- if you need more complex logic, put it in a script and set `action` to the script path plus simple arguments
-
-Good:
+A scalar is passed to `/bin/sh -c` as a whole:
 
 ```yaml
-action: "/usr/local/bin/reload-certificate /etc/certs/example.com/fullchain.pem"
+action: "cp {cert_path} /etc/ssl/ && systemctl reload nginx"
 ```
 
-Better for complex workflows:
+The full shell syntax is therefore available: pipes, redirects, `&&` and `||` chains, globbing, environment-variable expansion, and quoting.
 
 ```yaml
-action: "/usr/local/bin/post-certwarden-rollout"
+action: "/usr/local/bin/deploy --note 'cert renewed'"
 ```
+
+Because a shell parses the string, shell metacharacters in it are syntax rather than data. If an argument may contain spaces, quotes, or `$`, either quote it correctly or use the list form.
+
+### List form
+
+A sequence is executed directly. No shell is involved, `argv[0]` is the binary and every other item is passed through untouched:
+
+```yaml
+action:
+  - /usr/local/bin/deploy
+  - --note
+  - "cert renewed"
+```
+
+Here `cert renewed` stays a single argument, and nothing expands, globs, or chains. This is the form to prefer when you do not need shell features.
+
+### Trusted configuration
+
+Running the string form through a shell does not widen the tool's trust boundary. The config file is trusted input: by convention it is owned by `root` and mode `600`, and it already contains the command that is executed as the service user. Anyone who can write that file can already run arbitrary code as that user, with or without a shell.
+
+Keep the config file's ownership and permissions tight, and treat it as the security-relevant file it is.
 
 ## Deployment Behavior
 
@@ -173,5 +201,6 @@ Current startup validation checks these conditions before deployment begins:
 - every configured certificate must have a non-empty `cert_secret`
 - every configured certificate must have a non-empty `cert_path`
 - `name` may only contain letters, numbers, dots, underscores, and hyphens
+- `action`, if the key is present, must not be blank
 
 If validation fails, the process exits before contacting CertWarden.

@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -165,7 +166,7 @@ func TestHandleCertificateActionIgnoresWhitespaceAndRunsCommand(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "action-ran")
 	action := "   /usr/bin/touch   " + target + "   "
 
-	if err := handleCertificateAction(testLogger(), action); err != nil {
+	if err := handleCertificateAction(testLogger(), configuration.ShellAction(action)); err != nil {
 		t.Fatalf("handleCertificateAction returned error: %v", err)
 	}
 
@@ -175,7 +176,7 @@ func TestHandleCertificateActionIgnoresWhitespaceAndRunsCommand(t *testing.T) {
 }
 
 func TestHandleCertificateActionWhitespaceOnlyIsNoop(t *testing.T) {
-	if err := handleCertificateAction(testLogger(), "   "); err != nil {
+	if err := handleCertificateAction(testLogger(), configuration.ShellAction("   ")); err != nil {
 		t.Fatalf("expected whitespace-only action to be ignored, got error: %v", err)
 	}
 }
@@ -352,7 +353,7 @@ func TestHandleCertificateActionLogsStderrAndExitCodeOnFailure(t *testing.T) {
 	script := writeActionScript(t, "echo boom >&2\nexit 3\n")
 
 	var buf bytes.Buffer
-	if err := handleCertificateAction(capturingLogger(&buf), script); err == nil {
+	if err := handleCertificateAction(capturingLogger(&buf), configuration.ShellAction(script)); err == nil {
 		t.Fatal("expected error for failing action")
 	}
 
@@ -380,7 +381,7 @@ func TestHandleCertificateActionLogsStdoutAtDebugOnSuccess(t *testing.T) {
 	script := writeActionScript(t, "echo reloaded\n")
 
 	var buf bytes.Buffer
-	if err := handleCertificateAction(capturingLogger(&buf), script); err != nil {
+	if err := handleCertificateAction(capturingLogger(&buf), configuration.ShellAction(script)); err != nil {
 		t.Fatalf("handleCertificateAction returned error: %v", err)
 	}
 
@@ -400,7 +401,7 @@ func TestHandleCertificateActionLogsStderrOnSuccess(t *testing.T) {
 	script := writeActionScript(t, "echo warning >&2\n")
 
 	var buf bytes.Buffer
-	if err := handleCertificateAction(capturingLogger(&buf), script); err != nil {
+	if err := handleCertificateAction(capturingLogger(&buf), configuration.ShellAction(script)); err != nil {
 		t.Fatalf("handleCertificateAction returned error: %v", err)
 	}
 
@@ -419,7 +420,7 @@ func TestHandleCertificateActionTruncatesOutputAtCap(t *testing.T) {
 	script := writeActionScript(t, "cat "+payload+" >&2\nexit 1\n")
 
 	var buf bytes.Buffer
-	if err := handleCertificateAction(capturingLogger(&buf), script); err == nil {
+	if err := handleCertificateAction(capturingLogger(&buf), configuration.ShellAction(script)); err == nil {
 		t.Fatal("expected error for failing action")
 	}
 
@@ -1026,7 +1027,7 @@ func TestHandleCertificatesForceDeploysUnchangedCertificate(t *testing.T) {
 	seedFile(t, config.Certificates[0].CaPath, bodies[CaCertificateFile], 0644)
 
 	marker := filepath.Join(t.TempDir(), "action-ran")
-	config.Certificates[0].Action = "/usr/bin/touch " + marker
+	config.Certificates[0].Action = configuration.ShellAction("/usr/bin/touch " + marker)
 
 	withoutForce := HandleCertificates(testLogger(), config)
 	if len(withoutForce.Unchanged) != 1 {
@@ -1096,5 +1097,98 @@ func assertFileMode(t *testing.T, path string, want os.FileMode) {
 
 	if info.Mode().Perm() != want {
 		t.Fatalf("unexpected mode of %s: got %o want %o", path, info.Mode().Perm(), want)
+	}
+}
+
+// TestHandleCertificateActionStringFormRunsPlainCommand pins the form every
+// pre-existing config uses: a single command with simple arguments must keep
+// working exactly as before.
+func TestHandleCertificateActionStringFormRunsPlainCommand(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "plain-command-ran")
+
+	if err := handleCertificateAction(testLogger(), configuration.ShellAction("/usr/bin/touch "+target)); err != nil {
+		t.Fatalf("handleCertificateAction returned error: %v", err)
+	}
+
+	assertFileExists(t, target)
+}
+
+// TestHandleCertificateActionStringFormChainsCommands is the regression guard
+// for #29: before the shell was involved, "a && b" ran a with "&&" and "b" as
+// literal arguments, so b never executed at all.
+func TestHandleCertificateActionStringFormChainsCommands(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "chain")
+	first := writeActionScript(t, "printf 'first\n' >> "+marker+"\n")
+	second := writeActionScript(t, "printf 'second\n' >> "+marker+"\n")
+
+	action := configuration.ShellAction(first + " && " + second)
+	if err := handleCertificateAction(testLogger(), action); err != nil {
+		t.Fatalf("handleCertificateAction returned error: %v", err)
+	}
+
+	// Both ran, and in order: without a shell only the first script would have
+	// executed, with "&&" and the second path handed to it as arguments.
+	assertFileContents(t, marker, "first\nsecond\n")
+}
+
+// TestHandleCertificateActionStringFormHonoursQuoting proves an argument with
+// spaces survives as a single argument when it is quoted, which was
+// inexpressible while the action was split on whitespace.
+func TestHandleCertificateActionStringFormHonoursQuoting(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "args")
+	script := writeActionScript(t, "printf '%s\\n' \"$#\" \"$1\" > "+out+"\n")
+
+	action := configuration.ShellAction(script + " 'cert renewed'")
+	if err := handleCertificateAction(testLogger(), action); err != nil {
+		t.Fatalf("handleCertificateAction returned error: %v", err)
+	}
+
+	assertFileContents(t, out, "1\ncert renewed\n")
+}
+
+// TestHandleCertificateActionListFormExecsWithoutShell pins the list form: no
+// shell means no operator handling, no variable expansion, and arguments that
+// arrive byte-for-byte as configured.
+func TestHandleCertificateActionListFormExecsWithoutShell(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "args")
+	script := writeActionScript(t, "for arg in \"$@\"; do printf '%s\\n' \"$arg\" >> "+out+"; done\n")
+
+	action := configuration.ExecAction(script, "cert renewed", "$HOME", "&&", "/usr/bin/touch /tmp/should-not-exist")
+	if err := handleCertificateAction(testLogger(), action); err != nil {
+		t.Fatalf("handleCertificateAction returned error: %v", err)
+	}
+
+	assertFileContents(t, out, "cert renewed\n$HOME\n&&\n/usr/bin/touch /tmp/should-not-exist\n")
+}
+
+func TestHandleCertificateActionEmptyListIsNoop(t *testing.T) {
+	if err := handleCertificateAction(testLogger(), configuration.ExecAction()); err != nil {
+		t.Fatalf("expected an empty action list to be ignored, got error: %v", err)
+	}
+}
+
+func TestActionCommandPicksExecutionMode(t *testing.T) {
+	shell, runnable := actionCommand(configuration.ShellAction("systemctl reload nginx"))
+	if !runnable {
+		t.Fatal("expected the string form to be runnable")
+	}
+
+	wantShellArgs := []string{configuration.ShellPath, "-c", "systemctl reload nginx"}
+	if !slices.Equal(shell.Args, wantShellArgs) {
+		t.Fatalf("string form built %v, want %v", shell.Args, wantShellArgs)
+	}
+
+	list, runnable := actionCommand(configuration.ExecAction("/usr/bin/systemctl", "reload", "nginx"))
+	if !runnable {
+		t.Fatal("expected the list form to be runnable")
+	}
+
+	wantListArgs := []string{"/usr/bin/systemctl", "reload", "nginx"}
+	if !slices.Equal(list.Args, wantListArgs) {
+		t.Fatalf("list form built %v, want %v", list.Args, wantListArgs)
+	}
+
+	if _, runnable := actionCommand(configuration.ShellAction("  ")); runnable {
+		t.Fatal("expected a blank action to be reported as not runnable")
 	}
 }

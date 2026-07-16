@@ -12,7 +12,7 @@ func TestStringSubstitutionWithPlaceholders(t *testing.T) {
 		CertificatePath: "/fake/path/{name}",
 		KeyPath:         "/fake/path/{name}-key",
 		CaPath:          "/fake/path/{name}-ca",
-		Action:          "./fake action {cert_path} {key_path} {ca_path}",
+		Action:          ShellAction("./fake action {cert_path} {key_path} {ca_path}"),
 	}
 
 	cfg := ConfigFileData{
@@ -33,9 +33,9 @@ func TestStringSubstitutionWithPlaceholders(t *testing.T) {
 		t.Fail()
 		t.Logf(`CaPath = %q, want "/fake/path/qwer-ca"`, cfg.Certificates[0].CaPath)
 	}
-	if cfg.Certificates[0].Action != "./fake action /fake/path/qwer /fake/path/qwer-key /fake/path/qwer-ca" {
+	if cfg.Certificates[0].Action.Command != "./fake action /fake/path/qwer /fake/path/qwer-key /fake/path/qwer-ca" {
 		t.Fail()
-		t.Logf(`Action = %q, want "./fake action /fake/path/qwer /fake/path/qwer-key /fake/path/qwer-ca"`, cfg.Certificates[0].Action)
+		t.Logf(`Action = %q, want "./fake action /fake/path/qwer /fake/path/qwer-key /fake/path/qwer-ca"`, cfg.Certificates[0].Action.Command)
 	}
 }
 
@@ -47,7 +47,7 @@ func TestStringSubstitutionWithoutPlaceholders(t *testing.T) {
 		CertificatePath: "/fake/path/asd",
 		KeyPath:         "/fake/path/asdf-key",
 		CaPath:          "/fake/path/asdf-ca",
-		Action:          "./fake action abcd efgh",
+		Action:          ShellAction("./fake action abcd efgh"),
 	}
 
 	cfg := ConfigFileData{
@@ -68,8 +68,43 @@ func TestStringSubstitutionWithoutPlaceholders(t *testing.T) {
 		t.Fail()
 		t.Logf(`CaPath = %q, want "/fake/path/asdf-ca"`, cfg.Certificates[0].CaPath)
 	}
-	if cfg.Certificates[0].Action != "./fake action abcd efgh" {
+	if cfg.Certificates[0].Action.Command != "./fake action abcd efgh" {
 		t.Fail()
-		t.Logf(`Action = %q, want "./fake action abcd efgh"`, cfg.Certificates[0].Action)
+		t.Logf(`Action = %q, want "./fake action abcd efgh"`, cfg.Certificates[0].Action.Command)
+	}
+}
+
+// TestStringSubstitutionInListAction makes sure the list form gets the same
+// placeholders as the string form, per argument.
+func TestStringSubstitutionInListAction(t *testing.T) {
+	cfg := ConfigFileData{
+		Certificates: []CertificateData{
+			{
+				Name:            "qwer",
+				CertificatePath: "/fake/path/{name}",
+				KeyPath:         "/fake/path/{name}-key",
+				CaPath:          "/fake/path/{name}-ca",
+				Action:          ExecAction("/fake/deploy", "--note", "{name} renewed", "{cert_path}", "{key_path}", "{ca_path}"),
+			},
+		},
+	}
+
+	cfg.SubstituteKeys(nil)
+
+	want := []string{"/fake/deploy", "--note", "qwer renewed", "/fake/path/qwer", "/fake/path/qwer-key", "/fake/path/qwer-ca"}
+	got := cfg.Certificates[0].Action.Args
+
+	if len(got) != len(want) {
+		t.Fatalf("Action.Args = %v, want %v", got, want)
+	}
+
+	for index := range want {
+		if got[index] != want[index] {
+			t.Fatalf("Action.Args[%d] = %q, want %q", index, got[index], want[index])
+		}
+	}
+
+	if cfg.Certificates[0].Action.Command != "" {
+		t.Fatalf("Action.Command = %q, want it to stay empty for the list form", cfg.Certificates[0].Action.Command)
 	}
 }

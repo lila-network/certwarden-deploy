@@ -35,5 +35,13 @@ certificates:
     ca_path: "/path/to/test-ca-cert.pem"
 
     # action to run when certificate was updated or --force is on
-    action: "/usr/bin/systemd reload caddy"
+    # a string is run through /bin/sh, so pipes, redirects, && and quoting work
+    action: "/usr/bin/systemctl reload caddy"
+
+    # a list is executed directly without a shell instead, which is the safer
+    # choice when an argument contains spaces:
+    # action:
+    #   - /usr/local/bin/deploy
+    #   - --note
+    #   - "cert renewed"
 

@@ -196,8 +196,19 @@ func runBinaryExpectingExitCode(t *testing.T, wantCode int, binaryPath string, a
 
 // e2eCert describes one certificate entry for the generated config file.
 type e2eCert struct {
-	name     string
-	action   string
+	name string
+
+	// action is the string form of the action, rendered as a scalar.
+	action string
+
+	// actionArgs is the list form of the action, rendered as a sequence. It
+	// takes precedence over action when both are set.
+	actionArgs []string
+
+	// runOn is rendered as run_on when non-empty, and omitted otherwise so the
+	// default policy is exercised.
+	runOn string
+
 	certPath string
 	keyPath  string
 	caPath   string
@@ -258,8 +269,23 @@ func writeE2EConfig(t *testing.T, configPath string, baseURL string, certs ...e2
     key_secret: "key-secret"
     key_path: %q
     ca_path: %q
-    action: %q
-`, cert.name, cert.certPath, cert.keyPath, cert.caPath, cert.action)
+`, cert.name, cert.certPath, cert.keyPath, cert.caPath)
+
+		// An empty action must be omitted entirely: an action key that is
+		// present but blank is a config error, not "no action".
+		switch {
+		case len(cert.actionArgs) > 0:
+			b.WriteString("    action:\n")
+			for _, arg := range cert.actionArgs {
+				fmt.Fprintf(&b, "      - %q\n", arg)
+			}
+		case cert.action != "":
+			fmt.Fprintf(&b, "    action: %q\n", cert.action)
+		}
+
+		if cert.runOn != "" {
+			fmt.Fprintf(&b, "    run_on: %q\n", cert.runOn)
+		}
 	}
 
 	writeFile(t, configPath, b.String())
@@ -499,5 +525,61 @@ func TestCLI_FailingKeyLeavesOldCertificateOnDisk(t *testing.T) {
 
 	if len(leftovers) != 0 {
 		t.Fatalf("temporary files left behind in %s: %v", certDir, leftovers)
+	}
+}
+
+// TestCLI_RunsShellFormAndListFormActions drives both action forms end to end,
+// through the YAML parser and the real binary.
+func TestCLI_RunsShellFormAndListFormActions(t *testing.T) {
+	server := startCertServer(t)
+
+	tmpDir := t.TempDir()
+	binaryPath := buildBinary(t)
+	marker := filepath.Join(tmpDir, "actions.log")
+
+	// string form: a && chain with redirects, none of which survive being
+	// split on whitespace and exec'd directly
+	shellCert := newE2ECert(tmpDir, "shell.example.com")
+	shellCert.action = "printf 'shell cert renewed\\n' >> " + marker +
+		" && printf 'chained\\n' >> " + marker
+
+	// list form: arguments are handed to the binary untouched, so a space and
+	// an && stay data instead of turning into syntax
+	listScript := filepath.Join(tmpDir, "list-action.sh")
+	writeExecutableFile(t, listScript, fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' \"$@\" >> %q\n", marker))
+
+	listCert := newE2ECert(tmpDir, "list.example.com")
+	listCert.actionArgs = []string{listScript, "cert renewed", "&&"}
+
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	writeE2EConfig(t, configPath, server.URL, shellCert, listCert)
+
+	runBinaryExpectingExitCode(t, 0, binaryPath, "-c", configPath)
+
+	assertFileContents(t, marker, "shell cert renewed\nchained\ncert renewed\n&&\n")
+}
+
+// TestCLI_RejectsBlankAction pins that an action key that is present but empty
+// is a config error rather than a silent no-op.
+func TestCLI_RejectsBlankAction(t *testing.T) {
+	server := startCertServer(t)
+
+	tmpDir := t.TempDir()
+	binaryPath := buildBinary(t)
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	cert := newE2ECert(tmpDir, "example.com")
+	writeFile(t, configPath, fmt.Sprintf(`base_url: %q
+certificates:
+  - name: %q
+    cert_secret: "cert-secret"
+    cert_path: %q
+    action: "   "
+`, server.URL, cert.name, cert.certPath))
+
+	output := runBinaryExpectingExitCode(t, 1, binaryPath, "-c", configPath)
+
+	if !strings.Contains(output, "Field 'action' for certificate example.com cannot be blank!") {
+		t.Fatalf("expected a blank-action validation error, got:\n%s", output)
 	}
 }

@@ -28,6 +28,13 @@ func (c *ConfigFileData) IsValid() ConfigValidationError {
 			err.Add(`Field 'cert_path' for certificate ` + cert.Name + " cannot be blank!")
 		}
 
+		// An omitted action simply means "nothing to run". An action that is
+		// present but empty is a mistake worth reporting: the user asked for
+		// something to happen and nothing would.
+		if cert.Action.IsSet() && cert.Action.IsEmpty() {
+			err.Add(`Field 'action' for certificate ` + cert.Name + " cannot be blank!")
+		}
+
 		re := regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
 		if !re.MatchString(cert.Name) {
 			err.Add(`Field 'name' for certificate may only contain -_. and alphanumeric characters!`)

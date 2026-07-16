@@ -12,11 +12,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Unit and E2E tests
 - Config file is searched in `./certwarden-deploy.yaml`, `$XDG_CONFIG_HOME/certwarden-deploy/config.yaml` and `/etc/certwarden-deploy/config.yaml` when `--config` is not set
 - Server response body is now surfaced on non-success status codes
+- `action` accepts a list of arguments, which is executed directly without a shell (#29)
 
 ### Changed
 
 - Migrated repository to GitHub
 - file write procedure got more resilient
+- a string `action` is now run through `/bin/sh -c`, so pipes, redirects, `&&` and quoting work (#29)
+
+    Previously the string was split on whitespace and exec'd directly, so `action: "cp a b && systemctl reload nginx"`
+    silently ran `cp` with `&&` as an argument. Single commands keep working unchanged. A command that does not exist
+    now fails with the shell's exit code 127 instead of a "file not found" error.
+
+- an `action` key that is present but blank is now a configuration error instead of a silent no-op (#29)
 
 ### Fixed
 
