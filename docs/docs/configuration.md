@@ -180,12 +180,30 @@ An unknown value is rejected at startup.
 
 `certwarden-deploy` supports placeholder substitution to reduce repetition in the config file.
 
+In this section, "path keys" means `cert_path`, `key_path`, `ca_path`, `privatecert_path`, and `privatecertchain_path`.
+
 Available placeholders:
 
-- `{name}`: available in `cert_path`, `key_path`, `ca_path`, `privatecert_path`, `privatecertchain_path`, and `action`
-- `{cert_path}`: available in `action`
-- `{key_path}`: available in `action`
-- `{ca_path}`: available in `action`
+| Placeholder | Expands to | Available in |
+| --- | --- | --- |
+| `{name}` | the certificate `name` | path keys, `action` |
+| `{common_name}` | the certificate `name` | path keys, `action` |
+| `{cert_id}` | the certificate `name` | path keys, `action` |
+| `{date}` | the run date as `YYYYMMDD` | path keys, `action` |
+| `{base_url}` | the top-level `base_url` | path keys, `action` |
+| `{cert_path}` | the expanded `cert_path` | `action` |
+| `{key_path}` | the expanded `key_path` | `action` |
+| `{ca_path}` | the expanded `ca_path` | `action` |
+| `{privatecert_path}` | the expanded `privatecert_path` | `action` |
+| `{privatecertchain_path}` | the expanded `privatecertchain_path` | `action` |
+
+`{common_name}` and `{cert_id}` are aliases of `{name}`, provided to ease migration from other CertWarden deployment tools. CertWarden addresses a certificate by a single identifier, so all three expand to the same value.
+
+`{date}` is resolved once per run, not once per field, so a run that crosses midnight cannot write two different dates into two paths.
+
+Path keys are expanded first, then `action` is expanded from the results. That means `{cert_path}` in an `action` always resolves to the final on-disk location. Substitution is a single pass: a value that is substituted in is never scanned for placeholders again, so the outcome never depends on replacement order.
+
+Placeholders that no substitution recognises are left untouched and reported with a warning naming the placeholder, the certificate, and the field. A misspelled `{cert-path}` therefore shows up in the log instead of silently becoming part of a file path.
 
 In the list form of `action`, placeholders are substituted in every item individually, so an item may be a placeholder on its own.
 
@@ -206,6 +224,18 @@ After substitution, the action above becomes:
 
 ```text
 /usr/local/bin/reload-cert /etc/certs/example.com/fullchain.pem /etc/certs/example.com/privkey.pem
+```
+
+`{date}` is handy for keeping dated copies of a rollout:
+
+```yaml
+certificates:
+  - name: "example.com"
+    cert_secret: "cw_cert_api_key"
+    cert_path: "/etc/certs/{name}/{date}/fullchain.pem"
+    key_secret: "cw_key_api_key"
+    key_path: "/etc/certs/{name}/{date}/privkey.pem"
+    action: "/usr/local/bin/reload-cert {cert_path}"
 ```
 
 ## Action Command Semantics

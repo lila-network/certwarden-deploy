@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `actions.enabled` and `--no-actions` deploy the files but skip every post-rollout action. Actions stay on by default (#46)
 - every run now ends with a summary record counting new, changed, unchanged, failed, action_failed and action_skipped certificates (#30)
 - Support for the `privatecerts` and `privatecertchains` download endpoints via the optional `privatecert_path` and `privatecertchain_path` keys (#4)
+- Placeholders `{privatecert_path}`, `{privatecertchain_path}`, `{date}`, `{base_url}`, `{common_name}` and `{cert_id}` (#32)
+- Unrecognised placeholders are now reported with a warning naming the placeholder and the certificate (#32)
 
 ### Changed
 

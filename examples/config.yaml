@@ -52,12 +52,24 @@ certificates:
 
     # action to run when certificate was updated or --force is on
     # a string is run through /bin/sh, so pipes, redirects, && and quoting work
+    #
+    # the paths above and the action support these placeholders:
+    #   {name}, {common_name}, {cert_id}  the certificate name
+    #   {date}                            the run date as YYYYMMDD
+    #   {base_url}                        the base_url set above
+    # the action additionally supports the expanded paths:
+    #   {cert_path}, {key_path}, {ca_path}, {privatecert_path}, {privatecertchain_path}
+    #
+    # unrecognised placeholders are left as-is and reported with a warning
     action: "/usr/bin/systemctl reload caddy"
 
     # a list is executed directly without a shell instead, which is the safer
-    # choice when an argument contains spaces:
+    # choice when an argument contains spaces. Every argument is expanded on its
+    # own, so a placeholder that is a whole argument stays one argument:
     # action:
     #   - /usr/local/bin/deploy
+    #   - --cert
+    #   - "{cert_path}"
     #   - --note
     #   - "cert renewed"
 
