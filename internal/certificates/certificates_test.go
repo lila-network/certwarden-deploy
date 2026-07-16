@@ -3,6 +3,7 @@ package certificates
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -289,12 +290,12 @@ func TestHandleCertificatesRecordsFailuresAndContinues(t *testing.T) {
 	}
 
 	// The broken certificate must not stop the healthy one behind it.
-	if len(result.Changed) != 1 || result.Changed[0] != "good.example.com" {
-		t.Fatalf("unexpected changed certificates: got %v", result.Changed)
+	if len(result.New) != 1 || result.New[0] != "good.example.com" {
+		t.Fatalf("unexpected new certificates: got %v", result.New)
 	}
 
-	if len(result.New) != 0 {
-		t.Fatalf("New is expected to stay empty until #31: got %v", result.New)
+	if len(result.Changed) != 0 {
+		t.Fatalf("a first deployment must not be reported as changed: got %v", result.Changed)
 	}
 
 	if result.ExitCode() != ExitCertificateFailure {
@@ -327,8 +328,8 @@ func TestHandleCertificatesReportsUnchangedOnSecondRun(t *testing.T) {
 	}
 
 	first := HandleCertificates(testLogger(), config)
-	if len(first.Changed) != 1 {
-		t.Fatalf("expected certificate to be reported as changed: got %v", first.Changed)
+	if len(first.New) != 1 || first.New[0] != "example.com" {
+		t.Fatalf("expected certificate to be reported as new: got %v", first.New)
 	}
 
 	second := HandleCertificates(testLogger(), config)
@@ -951,7 +952,13 @@ func TestHandleCertificatesFailedCertificateDoesNotBlockNextOne(t *testing.T) {
 	assertNoTempFiles(t, brokenDir)
 	assertNoTempFiles(t, healthyDir)
 
-	if len(result.Changed) != 1 || result.Changed[0] != "healthy.example.com" {
+	// every artefact of the healthy certificate is a first deployment, so it is
+	// reported as new rather than changed (#31)
+	if len(result.New) != 1 || result.New[0] != "healthy.example.com" {
+		t.Fatalf("unexpected new certificates: got %v", result.New)
+	}
+
+	if len(result.Changed) != 0 {
 		t.Fatalf("unexpected changed certificates: got %v", result.Changed)
 	}
 
@@ -993,9 +1000,15 @@ func TestHandleCertificatesDryRunStagesNothing(t *testing.T) {
 		}
 	}
 
-	// a dry run still reports what it would have done
-	if len(result.Changed) != 1 || result.Changed[0] != "example.com" {
-		t.Fatalf("expected the dry run to report the certificate as changed: got %v", result.Changed)
+	// a dry run still reports what it would have done. The certificate exists
+	// with different content but the key and CA do not exist at all, and a
+	// created artefact wins over a modified one, so the certificate is new (#31).
+	if len(result.New) != 1 || result.New[0] != "example.com" {
+		t.Fatalf("expected the dry run to report the certificate as new: got %v", result.New)
+	}
+
+	if len(result.Changed) != 0 {
+		t.Fatalf("expected nothing to be reported as changed: got %v", result.Changed)
 	}
 
 	if result.ExitCode() != ExitSuccess {
@@ -1190,5 +1203,237 @@ func TestActionCommandPicksExecutionMode(t *testing.T) {
 
 	if _, runnable := actionCommand(configuration.ShellAction("  ")); runnable {
 		t.Fatal("expected a blank action to be reported as not runnable")
+	}
+}
+
+// TestAggregateStateFoldsArtefacts pins the aggregation rule: new beats
+// changed, changed beats unchanged.
+func TestAggregateStateFoldsArtefacts(t *testing.T) {
+	tests := []struct {
+		name   string
+		states []RolloutState
+		want   RolloutState
+	}{
+		{name: "nothing happened", states: []RolloutState{Unchanged, Unchanged, Unchanged}, want: Unchanged},
+		{name: "a single artefact changed", states: []RolloutState{Unchanged, Modified, Unchanged}, want: Modified},
+		{name: "a single artefact was created", states: []RolloutState{Unchanged, Unchanged, Created}, want: Created},
+		{name: "created outranks modified", states: []RolloutState{Modified, Created, Unchanged}, want: Created},
+		{name: "created outranks modified regardless of order", states: []RolloutState{Created, Modified, Modified}, want: Created},
+		{name: "no artefacts at all", states: nil, want: Unchanged},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := aggregateState(tc.states...); got != tc.want {
+				t.Fatalf("aggregateState(%v) = %v, want %v", tc.states, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestHandleCertificatesRunOnPolicies walks every run_on policy against every
+// rollout outcome, with and without --force.
+//
+// The omitted policy is in the table on purpose: it must behave exactly like
+// new_or_changed, which is what the tool did before run_on existed.
+func TestHandleCertificatesRunOnPolicies(t *testing.T) {
+	const serverBody = "server-body"
+
+	states := []struct {
+		name string
+
+		// seed is the content to put on disk first, "" means no file at all
+		seed string
+
+		want RolloutState
+	}{
+		{name: "new", seed: "", want: Created},
+		{name: "changed", seed: "stale-body", want: Modified},
+		{name: "unchanged", seed: serverBody, want: Unchanged},
+	}
+
+	policies := []struct {
+		name  string
+		runOn string
+
+		// runsAction maps a state name onto whether the action fires when
+		// --force is not given
+		runsAction map[string]bool
+	}{
+		{
+			name:       "omitted",
+			runOn:      "",
+			runsAction: map[string]bool{"new": true, "changed": true, "unchanged": false},
+		},
+		{
+			name:       "new_or_changed",
+			runOn:      "new_or_changed",
+			runsAction: map[string]bool{"new": true, "changed": true, "unchanged": false},
+		},
+		{
+			name:       "new",
+			runOn:      "new",
+			runsAction: map[string]bool{"new": true, "changed": false, "unchanged": false},
+		},
+		{
+			name:       "changed",
+			runOn:      "changed",
+			runsAction: map[string]bool{"new": false, "changed": true, "unchanged": false},
+		},
+		{
+			name:       "all",
+			runOn:      "all",
+			runsAction: map[string]bool{"new": true, "changed": true, "unchanged": true},
+		},
+	}
+
+	for _, policy := range policies {
+		for _, state := range states {
+			for _, force := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/%s/force=%v", policy.name, state.name, force), func(t *testing.T) {
+					t.Cleanup(func() {
+						configuration.Force = false
+						configuration.DryRun = false
+					})
+					configuration.Force = force
+
+					server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						_, _ = w.Write([]byte(serverBody))
+					}))
+					defer server.Close()
+
+					tmpDir := t.TempDir()
+					certPath := filepath.Join(tmpDir, "cert.pem")
+					if state.seed != "" {
+						if err := os.WriteFile(certPath, []byte(state.seed), 0644); err != nil {
+							t.Fatalf("failed to seed certificate: %v", err)
+						}
+					}
+
+					marker := filepath.Join(tmpDir, "action.log")
+					script := writeActionScript(t, "printf 'run\\n' >> "+marker+"\n")
+
+					config := &configuration.ConfigFileData{
+						BaseURL: server.URL,
+						Certificates: []configuration.CertificateData{
+							{
+								Name:              "example.com",
+								CertificateSecret: "secret",
+								CertificatePath:   certPath,
+								Action:            configuration.ShellAction(script),
+								RunOn:             policy.runOn,
+							},
+						},
+					}
+
+					result := HandleCertificates(testLogger(), config)
+
+					if len(result.Failed) != 0 || len(result.ActionFailed) != 0 {
+						t.Fatalf("unexpected failures: %v %v", result.Failed, result.ActionFailed)
+					}
+
+					// --force forces the action regardless of run_on, exactly
+					// as it forced the write.
+					wantAction := policy.runsAction[state.name] || force
+					assertActionRuns(t, marker, wantAction)
+
+					// The file is always deployed, whatever run_on says: run_on
+					// only ever gates the action.
+					assertFileContents(t, certPath, serverBody)
+
+					// --force rewrites an identical file and reports it as
+					// changed. That is a known wart, pinned here so it does not
+					// change by accident.
+					wantState := state.want
+					if force && wantState == Unchanged {
+						wantState = Modified
+					}
+					assertCertificateState(t, result, "example.com", wantState)
+				})
+			}
+		}
+	}
+}
+
+// assertActionRuns asserts that the action marker recorded exactly one run, or
+// no run at all.
+func assertActionRuns(t *testing.T, marker string, want bool) {
+	t.Helper()
+
+	if !want {
+		if _, err := os.Stat(marker); !os.IsNotExist(err) {
+			t.Fatalf("expected action not to run, got err=%v", err)
+		}
+		return
+	}
+
+	assertActionCount(t, marker, 1)
+}
+
+func assertActionCount(t *testing.T, marker string, want int) {
+	t.Helper()
+
+	data, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatalf("failed to read action marker %s: %v", marker, err)
+	}
+
+	if got := len(strings.Fields(string(data))); got != want {
+		t.Fatalf("unexpected action count: got %d want %d", got, want)
+	}
+}
+
+// assertCertificateState asserts which RunResult bucket a certificate landed in.
+func assertCertificateState(t *testing.T, result RunResult, name string, want RolloutState) {
+	t.Helper()
+
+	buckets := map[RolloutState][]string{
+		Created:   result.New,
+		Modified:  result.Changed,
+		Unchanged: result.Unchanged,
+	}
+
+	for state, names := range buckets {
+		if slices.Contains(names, name) != (state == want) {
+			t.Fatalf("certificate %q: want state %v, got new=%v changed=%v unchanged=%v",
+				name, want, result.New, result.Changed, result.Unchanged)
+		}
+	}
+}
+
+// TestNeedsRolloutIsTriState is the core of #31: "no file" and "different
+// file" both used to be a plain true, which made a first deployment
+// indistinguishable from a renewal.
+func TestNeedsRolloutIsTriState(t *testing.T) {
+	tests := []struct {
+		name string
+		seed string
+		want RolloutState
+	}{
+		{name: "missing file is created", seed: "", want: Created},
+		{name: "differing file is modified", seed: "stale-body", want: Modified},
+		{name: "identical file is unchanged", seed: "server-body", want: Unchanged},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "cert.pem")
+			if tc.seed != "" {
+				if err := os.WriteFile(path, []byte(tc.seed), 0644); err != nil {
+					t.Fatalf("failed to seed file: %v", err)
+				}
+			}
+
+			cert := GenericCertificate{FilePath: path, serverBytes: []byte("server-body")}
+
+			got, err := cert.needsRollout(testLogger())
+			if err != nil {
+				t.Fatalf("needsRollout returned error: %v", err)
+			}
+
+			if got != tc.want {
+				t.Fatalf("needsRollout = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

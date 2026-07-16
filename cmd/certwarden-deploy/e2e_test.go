@@ -583,3 +583,95 @@ certificates:
 		t.Fatalf("expected a blank-action validation error, got:\n%s", output)
 	}
 }
+
+// TestCLI_RunOnChangedSkipsFirstDeployment drives run_on through the YAML
+// parser: on the first run the file is created, which run_on: changed must not
+// treat as a change. Only the second, differing rollout fires the action.
+func TestCLI_RunOnChangedSkipsFirstDeployment(t *testing.T) {
+	body := "cert-body-v1"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(body))
+	}))
+	defer server.Close()
+
+	tmpDir := t.TempDir()
+	binaryPath := buildBinary(t)
+	marker := filepath.Join(tmpDir, "action.log")
+	actionScript := filepath.Join(tmpDir, "post-deploy.sh")
+	writeExecutableFile(t, actionScript, fmt.Sprintf("#!/bin/sh\nprintf 'run\\n' >> %q\n", marker))
+
+	cert := newE2ECert(tmpDir, "example.com")
+	cert.action = actionScript
+	cert.runOn = "changed"
+
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	writeE2EConfig(t, configPath, server.URL, cert)
+
+	runBinaryExpectingExitCode(t, 0, binaryPath, "-c", configPath)
+	assertFileContents(t, cert.certPath, body)
+
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("expected run_on: changed not to fire on a first deployment, got err=%v", err)
+	}
+
+	// nothing moved, still no action
+	runBinaryExpectingExitCode(t, 0, binaryPath, "-c", configPath)
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("expected run_on: changed not to fire on an unchanged run, got err=%v", err)
+	}
+
+	// now the content really changes
+	body = "cert-body-v2"
+	runBinaryExpectingExitCode(t, 0, binaryPath, "-c", configPath)
+	assertFileContents(t, cert.certPath, body)
+	assertActionCount(t, marker, 1)
+}
+
+// TestCLI_RunOnAllRunsWithoutAnyChange covers the opposite end of the policy
+// table: run_on: all fires even when nothing was written.
+func TestCLI_RunOnAllRunsWithoutAnyChange(t *testing.T) {
+	server := startCertServer(t)
+
+	tmpDir := t.TempDir()
+	binaryPath := buildBinary(t)
+	marker := filepath.Join(tmpDir, "action.log")
+	actionScript := filepath.Join(tmpDir, "post-deploy.sh")
+	writeExecutableFile(t, actionScript, fmt.Sprintf("#!/bin/sh\nprintf 'run\\n' >> %q\n", marker))
+
+	cert := newE2ECert(tmpDir, "example.com")
+	cert.action = actionScript
+	cert.runOn = "all"
+
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	writeE2EConfig(t, configPath, server.URL, cert)
+
+	runBinaryExpectingExitCode(t, 0, binaryPath, "-c", configPath)
+	assertActionCount(t, marker, 1)
+
+	// second run changes nothing on disk, the action still runs
+	runBinaryExpectingExitCode(t, 0, binaryPath, "-c", configPath)
+	assertActionCount(t, marker, 2)
+}
+
+func TestCLI_RejectsUnknownRunOn(t *testing.T) {
+	server := startCertServer(t)
+
+	tmpDir := t.TempDir()
+	binaryPath := buildBinary(t)
+
+	cert := newE2ECert(tmpDir, "example.com")
+	cert.runOn = "on_change"
+
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	writeE2EConfig(t, configPath, server.URL, cert)
+
+	output := runBinaryExpectingExitCode(t, 1, binaryPath, "-c", configPath)
+
+	if !strings.Contains(output, "Field 'run_on' for certificate example.com must be one of") {
+		t.Fatalf("expected an unknown run_on validation error, got:\n%s", output)
+	}
+
+	if _, err := os.Stat(cert.certPath); !os.IsNotExist(err) {
+		t.Fatalf("expected validation to stop the run before deploying, got err=%v", err)
+	}
+}

@@ -32,23 +32,31 @@ func HandleCertificates(logger *slog.Logger, config *configuration.ConfigFileDat
 	result := RunResult{}
 
 	for _, cert := range config.Certificates {
-		onDiskChanged, failure := rolloutCertificate(logger, config, cert)
+		state, failure := rolloutCertificate(logger, config, cert)
 		if failure != nil {
 			result.Failed = append(result.Failed, *failure)
 			continue
 		}
 
 		// Everything this certificate needed is on disk, so classify it.
-		// New is intentionally never filled here: Prepare cannot tell a first
-		// deployment from an update yet, see RunResult.New and #31.
-		if onDiskChanged {
+		// rolloutCertificate already folded the artefacts into one state.
+		switch state {
+		case Created:
+			result.New = append(result.New, cert.Name)
+		case Modified:
 			result.Changed = append(result.Changed, cert.Name)
-		} else {
+		default:
 			result.Unchanged = append(result.Unchanged, cert.Name)
 		}
 
-		// if cert OR key changed OR --force
-		if onDiskChanged || configuration.Force {
+		// run_on is evaluated on the aggregate state of the whole certificate
+		// and only once phase 2 has published every artefact, so an action never
+		// observes a half-deployed certificate (#28).
+		//
+		// --force runs the action no matter what run_on says, including
+		// run_on: new. That is what --force has always meant here: it forces
+		// both the write and the action.
+		if actionTriggered(cert.EffectiveRunOn(), state) || configuration.Force {
 			if configuration.DryRun {
 				// Actions never run during --dry-run, so they can never fail
 				// here and exit code 3 is unreachable in a dry run. A fetch
@@ -71,6 +79,43 @@ func HandleCertificates(logger *slog.Logger, config *configuration.ConfigFileDat
 	}
 
 	return result
+}
+
+// aggregateState folds the states of one certificate's artefacts into the
+// state of the certificate as a whole.
+//
+// New wins over changed: if any artefact was created the certificate is new,
+// otherwise if any artefact was modified it changed, otherwise nothing
+// happened to it.
+func aggregateState(states ...RolloutState) RolloutState {
+	result := Unchanged
+
+	for _, state := range states {
+		switch state {
+		case Created:
+			return Created
+		case Modified:
+			result = Modified
+		}
+	}
+
+	return result
+}
+
+// actionTriggered reports whether a run_on policy fires for a certificate that
+// ended up in the given state.
+func actionTriggered(policy configuration.RunOnPolicy, state RolloutState) bool {
+	switch policy {
+	case configuration.RunOnAll:
+		return true
+	case configuration.RunOnNew:
+		return state == Created
+	case configuration.RunOnChanged:
+		return state == Modified
+	default:
+		// DefaultRunOn, and the only policy that existed before run_on did
+		return state != Unchanged
+	}
 }
 
 // artefactsOf splits a configured certificate into the individual files it is
@@ -121,12 +166,14 @@ func artefactsOf(cert configuration.CertificateData) []*GenericCertificate {
 // entirely: by phase 2 all data has been fetched, written and fsynced, so a
 // rename can realistically only still fail if the filesystem itself is broken.
 //
-// Returns whether any artefact was written and a failure to record, if any.
+// Returns the aggregate state of the certificate and a failure to record, if
+// any. The state is folded across every artefact, so a certificate whose key
+// is new but whose CA merely changed is reported as new (#31).
 func rolloutCertificate(
 	logger *slog.Logger,
 	config *configuration.ConfigFileData,
 	cert configuration.CertificateData,
-) (bool, *CertFailure) {
+) (RolloutState, *CertFailure) {
 	artefacts := artefactsOf(cert)
 
 	// Phase 2' (abort): discard whatever is still staged when this returns.
@@ -140,18 +187,18 @@ func rolloutCertificate(
 
 	// Phase 1 (prepare): fetch and stage every artefact. Nothing that a TLS
 	// server could pick up changes here.
-	onDiskChanged := false
+	state := Unchanged
 	for _, artefact := range artefacts {
-		artefactChanged, err := artefact.Prepare(logger, config.BaseURL, config.DisableCertificateValidation)
+		artefactState, err := artefact.Prepare(logger, config.BaseURL, config.DisableCertificateValidation)
 		if err != nil {
 			logger.Error(
 				"Failed to roll out certificate", "path", artefact.FilePath,
 				"name", cert.Name, "file-type", artefact.Type, "error", err,
 			)
-			return false, &CertFailure{Name: cert.Name, Type: artefact.Type, Err: err}
+			return Unchanged, &CertFailure{Name: cert.Name, Type: artefact.Type, Err: err}
 		}
 
-		onDiskChanged = onDiskChanged || artefactChanged
+		state = aggregateState(state, artefactState)
 	}
 
 	// Phase 2 (commit): every artefact is fetched and on disk, publish them.
@@ -161,11 +208,11 @@ func rolloutCertificate(
 				"Failed to commit certificate", "path", artefact.FilePath,
 				"name", cert.Name, "file-type", artefact.Type, "error", err,
 			)
-			return false, &CertFailure{Name: cert.Name, Type: artefact.Type, Err: err}
+			return Unchanged, &CertFailure{Name: cert.Name, Type: artefact.Type, Err: err}
 		}
 	}
 
-	return onDiskChanged, nil
+	return state, nil
 }
 
 // Prepare is phase 1 of a rollout: it fetches the artefact from the server,
@@ -178,13 +225,14 @@ func rolloutCertificate(
 // is set as soon as the temporary file exists. Every error path out of Prepare
 // therefore leaves the file recorded and removable, never orphaned.
 //
-// Returns error on error, true if the artefact was staged for deployment, false
-// if it is already up to date.
-func (c *GenericCertificate) Prepare(logger *slog.Logger, baseUrl string, skipInsecure bool) (bool, error) {
+// Returns error on error, otherwise the state the artefact ended up in:
+// Created or Modified if it was staged for deployment, Unchanged if it is
+// already up to date.
+func (c *GenericCertificate) Prepare(logger *slog.Logger, baseUrl string, skipInsecure bool) (RolloutState, error) {
 	// An artefact nobody configured is not deployed at all, not even staged.
 	if c.FilePath == "" {
 		logger.Info("File path is empty, skipping...", "file-type", c.Type)
-		return false, nil
+		return Unchanged, nil
 	}
 
 	err := c.fetchFromServer(
@@ -193,35 +241,46 @@ func (c *GenericCertificate) Prepare(logger *slog.Logger, baseUrl string, skipIn
 		skipInsecure,
 	)
 	if err != nil {
-		return false, fmt.Errorf("failed to get certificate from server: %w", err)
+		return Unchanged, fmt.Errorf("failed to get certificate from server: %w", err)
 	}
 
-	fileNeedsRollout, err := c.needsRollout(logger)
+	state, err := c.needsRollout(logger)
 	if err != nil {
-		return false, fmt.Errorf("failed to check certificate on disk: %w", err)
+		return Unchanged, fmt.Errorf("failed to check certificate on disk: %w", err)
 	}
 
-	if !fileNeedsRollout && !configuration.Force {
+	if state == Unchanged && !configuration.Force {
 		logger.Info("File not changed, skipping...", "path", c.FilePath)
-		return false, nil
+		return Unchanged, nil
 	}
 
 	if configuration.Force {
 		logger.Info("Forcing file system change due to --force", "name", c.Name)
 	}
 
+	// --force rewrites the file even though the bytes are identical, and has
+	// always reported that as a change. Keep it: a forced run is meant to be
+	// loud, and callers already treat --force as "everything moved".
+	if state == Unchanged {
+		state = Modified
+	}
+
+	// Commit logs what it published, and this is the only place that still
+	// knows whether the target existed beforehand.
+	c.state = state
+
 	if configuration.DryRun {
 		// A dry run stages nothing, so there is nothing for Commit to publish
 		// or for Abort to remove.
 		logger.Info("DRY-RUN: skipping file write", "path", c.FilePath, "file-type", c.Type)
-		return true, nil
+		return state, nil
 	}
 
 	if err := c.writeTempFile(logger); err != nil {
-		return false, fmt.Errorf("failed to handle certificate: %w", err)
+		return Unchanged, fmt.Errorf("failed to handle certificate: %w", err)
 	}
 
-	return true, nil
+	return state, nil
 }
 
 // Commit is phase 2 of a rollout: it renames the staged file over the target,
@@ -245,7 +304,14 @@ func (c *GenericCertificate) Commit(logger *slog.Logger) error {
 	// handed over to the filesystem, there is nothing left for Abort to remove
 	c.tempPath = ""
 
-	logger.Info("New file deployed", "path", c.FilePath, "file-type", c.Type)
+	// Publishing is the moment worth reporting, and the state recorded by
+	// Prepare is what tells a first deployment from a renewal (#31).
+	if c.state == Created {
+		logger.Info("New file deployed", "path", c.FilePath, "file-type", c.Type)
+	} else {
+		logger.Info("File updated", "path", c.FilePath, "file-type", c.Type)
+	}
+
 	return nil
 }
 
@@ -289,29 +355,30 @@ func (c *GenericCertificate) readFromDisk() error {
 
 // needsRollout checks the data []bytes against the data on disk.
 //
-// Returns true if file needs rollout, false if not
-func (c *GenericCertificate) needsRollout(logger *slog.Logger) (bool, error) {
+// Returns the state the file would end up in: Created if there is no file yet,
+// Modified if there is one with different content, Unchanged otherwise.
+func (c *GenericCertificate) needsRollout(logger *slog.Logger) (RolloutState, error) {
 	err := c.readFromDisk()
 
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return true, nil
+			logger.Debug("No file on disk yet", "path", c.FilePath)
+			return Created, nil
 		} else {
-			return false, fmt.Errorf("failed to compare data to file on disk: %w", err)
+			return Unchanged, fmt.Errorf("failed to compare data to file on disk: %w", err)
 		}
 	}
 
 	diskHash := sha256.Sum256(c.diskBytes)
 	serverHash := sha256.Sum256(c.serverBytes)
 
-	hashesAreDifferent := diskHash != serverHash
-	if hashesAreDifferent {
+	if diskHash != serverHash {
 		logger.Debug("File on disk differs from server source", "path", c.FilePath)
-	} else {
-		logger.Debug("File on disk is identical to server source", "path", c.FilePath)
+		return Modified, nil
 	}
 
-	return hashesAreDifferent, nil
+	logger.Debug("File on disk is identical to server source", "path", c.FilePath)
+	return Unchanged, nil
 }
 
 // tempFilePattern is the os.CreateTemp pattern for staged files. The leading

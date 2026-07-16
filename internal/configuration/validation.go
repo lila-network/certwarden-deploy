@@ -35,6 +35,10 @@ func (c *ConfigFileData) IsValid() ConfigValidationError {
 			err.Add(`Field 'action' for certificate ` + cert.Name + " cannot be blank!")
 		}
 
+		if !cert.EffectiveRunOn().IsValid() {
+			err.Add(`Field 'run_on' for certificate ` + cert.Name + ` must be one of 'new', 'changed', 'new_or_changed' or 'all', got '` + cert.RunOn + `'!`)
+		}
+
 		re := regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
 		if !re.MatchString(cert.Name) {
 			err.Add(`Field 'name' for certificate may only contain -_. and alphanumeric characters!`)

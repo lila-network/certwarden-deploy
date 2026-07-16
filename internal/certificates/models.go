@@ -21,6 +21,39 @@ func (file FileType) String() string {
 	return "unknown"
 }
 
+// RolloutState describes what a rollout did to a single artefact on disk.
+//
+// The distinction between Created and Modified is what lets a run tell a first
+// deployment apart from a renewal, which is what run_on and the run summary
+// are built on.
+type RolloutState int
+
+const (
+	// Unchanged means the file on disk already matched the server content, so
+	// nothing was written. A skipped artefact (no path configured) is
+	// Unchanged too: nothing happened to it.
+	Unchanged RolloutState = iota
+
+	// Created means the file did not exist on disk before this run.
+	Created
+
+	// Modified means the file existed and its content differed.
+	Modified
+)
+
+func (s RolloutState) String() string {
+	switch s {
+	case Unchanged:
+		return "unchanged"
+	case Created:
+		return "created"
+	case Modified:
+		return "modified"
+	}
+
+	return "unknown"
+}
+
 // GenericCertificate is a generic container to enable us to
 // handle both certificates and keys with one function
 type GenericCertificate struct {
@@ -36,6 +69,11 @@ type GenericCertificate struct {
 
 	// Bytes fetched from disk
 	diskBytes []byte
+
+	// state is what Prepare decided this artefact's rollout would do, kept so
+	// Commit can report a first deployment differently from a renewal. It is
+	// Unchanged for an artefact that staged nothing.
+	state RolloutState
 
 	// tempPath is the fully written and fsynced file staged by Prepare that has
 	// not been renamed into place yet. It is empty whenever nothing is staged:
@@ -87,16 +125,16 @@ type ActionFailure struct {
 // problem: a run keeps going after a failure, and the result is only turned
 // into an exit code once every certificate has been attempted.
 type RunResult struct {
-	// New holds the names of certificates that were deployed for the first
-	// time.
+	// New holds the names of certificates where at least one artefact did not
+	// exist on disk before this run.
 	//
-	// Always empty for now: Rollout only reports a plain "changed" bool, so a
-	// first deployment cannot be told apart from an update. #31 will make
-	// needsRollout tri-state and populate this field.
+	// A certificate is New as soon as any of its artefacts was created, even
+	// if the others merely changed: the first deployment is the more
+	// interesting fact about that run.
 	New []string
 
-	// Changed holds the names of certificates where at least one artefact was
-	// written to disk
+	// Changed holds the names of certificates where nothing was created but at
+	// least one artefact was written with different content
 	Changed []string
 
 	// Unchanged holds the names of certificates that were already up to date

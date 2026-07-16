@@ -109,3 +109,69 @@ func TestConfigValidationAcceptsOmittedAction(t *testing.T) {
 		t.Fatalf("expected an omitted action to be valid, got %v", err.ErrorMessages)
 	}
 }
+
+// TestConfigValidationRejectsUnknownRunOn pins that a typo in run_on stops the
+// run instead of being silently skipped: a policy nobody validates is an
+// action that quietly never fires.
+func TestConfigValidationRejectsUnknownRunOn(t *testing.T) {
+	cfg := ConfigFileData{
+		BaseURL: "https://example.invalid",
+		Certificates: []CertificateData{
+			{
+				Name:              "example.com",
+				CertificateSecret: "secret",
+				CertificatePath:   "/tmp/cert.pem",
+				RunOn:             "on_change",
+			},
+		},
+	}
+
+	err := cfg.IsValid()
+
+	if !err.HasMessages() {
+		t.Fatal("expected an unknown run_on to be rejected")
+	}
+
+	want := `Field 'run_on' for certificate example.com must be one of 'new', 'changed', 'new_or_changed' or 'all', got 'on_change'!`
+	for _, message := range err.ErrorMessages {
+		if message == want {
+			return
+		}
+	}
+
+	t.Fatalf("expected validation message %q, got %v", want, err.ErrorMessages)
+}
+
+func TestConfigValidationAcceptsEveryKnownRunOn(t *testing.T) {
+	for _, runOn := range []string{"", "new", "changed", "new_or_changed", "all"} {
+		t.Run("run_on="+runOn, func(t *testing.T) {
+			cfg := ConfigFileData{
+				BaseURL: "https://example.invalid",
+				Certificates: []CertificateData{
+					{
+						Name:              "example.com",
+						CertificateSecret: "secret",
+						CertificatePath:   "/tmp/cert.pem",
+						RunOn:             runOn,
+					},
+				},
+			}
+
+			if err := cfg.IsValid(); err.HasMessages() {
+				t.Fatalf("expected run_on %q to be valid, got %v", runOn, err.ErrorMessages)
+			}
+		})
+	}
+}
+
+// TestEffectiveRunOnDefaultsToNewOrChanged pins the default that keeps every
+// pre-run_on config behaving as before.
+func TestEffectiveRunOnDefaultsToNewOrChanged(t *testing.T) {
+	if got := (CertificateData{}).EffectiveRunOn(); got != RunOnNewOrChanged {
+		t.Fatalf("omitted run_on = %q, want %q", got, RunOnNewOrChanged)
+	}
+
+	if got := (CertificateData{RunOn: "all"}).EffectiveRunOn(); got != RunOnAll {
+		t.Fatalf("run_on 'all' = %q, want %q", got, RunOnAll)
+	}
+}

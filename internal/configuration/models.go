@@ -36,6 +36,10 @@ type CertificateData struct {
 	KeyPath           string `yaml:"key_path"`
 	CaPath            string `yaml:"ca_path"`
 	Action            Action `yaml:"action"`
+
+	// RunOn selects when Action is executed. Empty means DefaultRunOn.
+	// Validated by IsValid, read through EffectiveRunOn.
+	RunOn string `yaml:"run_on"`
 }
 
 type ConfigValidationError struct {

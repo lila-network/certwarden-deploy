@@ -45,3 +45,12 @@ certificates:
     #   - --note
     #   - "cert renewed"
 
+    # when to run the action:
+    #   new            only when a file did not exist on disk before
+    #   changed        only when a file existed and its content differed
+    #   new_or_changed whenever a file was written (default)
+    #   all            on every run, even when nothing was written
+    # --force runs the action regardless of this setting
+    # default is new_or_changed
+    run_on: "new_or_changed"
+

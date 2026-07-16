@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Config file is searched in `./certwarden-deploy.yaml`, `$XDG_CONFIG_HOME/certwarden-deploy/config.yaml` and `/etc/certwarden-deploy/config.yaml` when `--config` is not set
 - Server response body is now surfaced on non-success status codes
 - `action` accepts a list of arguments, which is executed directly without a shell (#29)
+- per-certificate `run_on` selects when the action runs: `new`, `changed`, `new_or_changed` (default) or `all` (#31)
 
 ### Changed
 
@@ -25,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     now fails with the shell's exit code 127 instead of a "file not found" error.
 
 - an `action` key that is present but blank is now a configuration error instead of a silent no-op (#29)
+- a rollout now tells a first deployment apart from an update, so certificates are counted as new instead of changed (#31)
 
 ### Fixed
 

@@ -110,6 +110,12 @@ action:
 
 If the key is present it must not be blank: an `action` that is an empty string, a whitespace-only string, or an empty list is rejected at startup. Leave the key out entirely if no command should run.
 
+`run_on`
+
+Optional. Default: `new_or_changed`. Decides when `action` is executed, see [Action Trigger Policies](#action-trigger-policies).
+
+An unknown value is rejected at startup.
+
 ## Placeholders
 
 `certwarden-deploy` supports placeholder substitution to reduce repetition in the config file.
@@ -181,6 +187,41 @@ Running the string form through a shell does not widen the tool's trust boundary
 
 Keep the config file's ownership and permissions tight, and treat it as the security-relevant file it is.
 
+## Action Trigger Policies
+
+Every rollout classifies each of a certificate's files as one of:
+
+- **created**: the file did not exist on disk before this run
+- **modified**: the file existed and its content differed
+- **unchanged**: the file on disk already matched CertWarden
+
+The certificate as a whole is then **new** if any of its files was created, **changed** if none was created but at least one was modified, and **unchanged** otherwise.
+
+`run_on` selects which of those outcomes runs the `action`:
+
+| `run_on`         | new | changed | unchanged | Use case                                                        |
+| ---------------- | --- | ------- | --------- | --------------------------------------------------------------- |
+| `new`            | yes | no      | no        | one-off setup work that only makes sense on a first deployment   |
+| `changed`        | no  | yes     | no        | reload on renewal only, ignoring the initial rollout             |
+| `new_or_changed` | yes | yes     | no        | default: reload whenever something was written                   |
+| `all`            | yes | yes     | yes       | an action that is cheap and idempotent, or that checks for itself |
+
+Notes:
+
+- `run_on` only gates the `action`. Which files get written is never affected by it.
+- `--force` runs the action regardless of `run_on`, including `run_on: new`, because `--force` forces both the write and the action.
+- `--force` also rewrites files whose content is identical and reports them as changed, so a forced run counts as changed rather than unchanged.
+- omitting `run_on` behaves exactly like `new_or_changed`, which is what the tool did before this option existed.
+
+```yaml
+certificates:
+  - name: "example.com"
+    cert_secret: "cw_cert_api_key"
+    cert_path: "/etc/certs/{name}/fullchain.pem"
+    action: "/usr/bin/systemctl reload caddy"
+    run_on: "new_or_changed"
+```
+
 ## Deployment Behavior
 
 For each configured certificate, the binary:
@@ -190,7 +231,7 @@ For each configured certificate, the binary:
 3. writes changed files atomically through a temporary file and rename
 4. creates missing parent directories automatically
 5. preserves the existing file mode when replacing a file; newly created files default to mode `0644`
-6. runs the configured `action` if any managed file changed, or if `--force` was used
+6. runs the configured `action` if the certificate's outcome matches `run_on`, or if `--force` was used
 
 ## Validation Notes
 
@@ -202,5 +243,6 @@ Current startup validation checks these conditions before deployment begins:
 - every configured certificate must have a non-empty `cert_path`
 - `name` may only contain letters, numbers, dots, underscores, and hyphens
 - `action`, if the key is present, must not be blank
+- `run_on`, if set, must be one of `new`, `changed`, `new_or_changed`, `all`
 
 If validation fails, the process exits before contacting CertWarden.
