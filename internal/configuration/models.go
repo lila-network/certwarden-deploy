@@ -47,7 +47,10 @@ type ConfigFileData struct {
 	// Groups is optional sugar over Certificates: each group holds the values
 	// its members share, and ExpandGroups folds every member into Certificates
 	// before anything else reads the config. Both keys may be used together.
-	Groups map[string]CertificateGroup `yaml:"groups"`
+	// omitempty so that the desugared output of Redacted, where the groups
+	// have already been folded into Certificates, does not carry an empty
+	// groups key that no longer means anything.
+	Groups map[string]CertificateGroup `yaml:"groups,omitempty"`
 
 	Certificates []CertificateData `yaml:"certificates"`
 }

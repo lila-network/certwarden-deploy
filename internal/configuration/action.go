@@ -81,6 +81,19 @@ func (a *Action) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	return nil
 }
 
+// MarshalYAML renders an action back in the form it was written in.
+//
+// It implements yaml.InterfaceMarshaler, and exists for `config show`: without
+// it the action would be dumped as the struct behind it, which is neither what
+// the user wrote nor something they could paste back into a config file.
+func (a Action) MarshalYAML() (interface{}, error) {
+	if a.Args != nil {
+		return a.Args, nil
+	}
+
+	return a.Command, nil
+}
+
 // IsSet reports whether an action key was present in the config file.
 //
 // It says nothing about whether the action is runnable, only whether the user
