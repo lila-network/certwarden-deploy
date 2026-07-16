@@ -46,9 +46,21 @@ certificates:
     # optional, needs cert_secret and key_secret to be set
     privatecert_path: "/etc/haproxy/certs/app.pem"
 
+    # container to request for privatecert_path: pem, pkcs12 or jks
+    # optional, default is pem
+    #
+    # NOTE: change detection hashes the bytes the server returns. It is not
+    # verified whether CertWarden rebuilds pkcs12/jks containers per request;
+    # if it does, every run counts as changed and the action runs every time.
+    privatecert_format: "pem"
+
     # path where to save the certificate, the private key and the ca chain in one file
     # optional, needs cert_secret and key_secret to be set
     privatecertchain_path: "/etc/haproxy/certs/app-fullchain.pem"
+
+    # container to request for privatecertchain_path: pem, pkcs12 or jks
+    # optional, default is pem
+    privatecertchain_format: "pem"
 
     # action to run when certificate was updated or --force is on
     # a string is run through /bin/sh, so pipes, redirects, && and quoting work

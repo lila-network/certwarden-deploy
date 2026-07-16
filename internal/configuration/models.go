@@ -53,9 +53,17 @@ type CertificateData struct {
 	// private key. Optional: an empty value skips that download entirely.
 	PrivateCertPath string `yaml:"privatecert_path"`
 
+	// PrivateCertFormat selects the container the privatecerts endpoint
+	// returns: pem, pkcs12 or jks. Empty means pem.
+	PrivateCertFormat string `yaml:"privatecert_format"`
+
 	// PrivateCertChainPath is the destination for the combined certificate,
 	// private key and CA chain. Optional, same as PrivateCertPath.
 	PrivateCertChainPath string `yaml:"privatecertchain_path"`
+
+	// PrivateCertChainFormat selects the container the privatecertchains
+	// endpoint returns: pem, pkcs12 or jks. Empty means pem.
+	PrivateCertChainFormat string `yaml:"privatecertchain_format"`
 
 	Action Action `yaml:"action"`
 

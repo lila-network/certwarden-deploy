@@ -16,3 +16,12 @@ const PrivateCertApiPath = "/certwarden/api/v1/download/privatecerts/"
 const PrivateCertChainApiPath = "/certwarden/api/v1/download/privatecertchains/"
 
 const ApiKeyHeaderName = "X-API-Key"
+
+// Download formats accepted by the privatecerts and privatecertchains
+// endpoints. FormatPEM is the server default and is never sent as a query
+// parameter.
+const (
+	FormatPEM    = "pem"
+	FormatPKCS12 = "pkcs12"
+	FormatJKS    = "jks"
+)

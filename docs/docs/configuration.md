@@ -139,6 +139,23 @@ Requires `key_secret`: this endpoint authenticates with `cert_secret` and `key_s
 privatecert_path: "/etc/haproxy/certs/app.pem"
 ```
 
+`privatecert_format`
+
+Optional. Default: `pem`. One of `pem`, `pkcs12`, or `jks`.
+
+Selects the container the `privatecerts` endpoint returns. Anything other than `pem` is requested from the server with a `?format=` query parameter, and the response is written to disk unchanged, so binary containers land byte for byte.
+
+```yaml
+privatecert_path: "/opt/app/keystore.p12"
+privatecert_format: "pkcs12"
+```
+
+!!! warning "Change detection for `pkcs12` and `jks` is unverified"
+
+    `certwarden-deploy` decides whether to write a file, and whether to run the `action`, by hashing the bytes the server returned. That assumes the server returns the same bytes for an unchanged certificate.
+
+    Whether CertWarden rebuilds the PKCS#12/JKS container per request, with a fresh salt and IV, has not been verified. If it does, every run sees different bytes, every run counts as changed, and the `action` fires on every timer tick. If you use these formats, check the behaviour on your instance before relying on the `action`.
+
 `privatecertchain_path`
 
 Optional. Destination path for the combined certificate, private key, and CA chain, as served by the `privatecertchains` endpoint.
@@ -150,6 +167,12 @@ Requires `key_secret`, for the same reason as `privatecert_path`.
 ```yaml
 privatecertchain_path: "/etc/haproxy/certs/app-fullchain.pem"
 ```
+
+`privatecertchain_format`
+
+Optional. Default: `pem`. One of `pem`, `pkcs12`, or `jks`.
+
+Same as `privatecert_format`, for the `privatecertchains` endpoint. The same unverified change-detection caveat applies.
 
 `action`
 
@@ -370,5 +393,6 @@ Current startup validation checks these conditions before deployment begins:
 - `name` may only contain letters, numbers, dots, underscores, and hyphens
 - `run_on`, if set, must be one of `new`, `changed`, `new_or_changed`, `all`
 - `key_secret` must be set when `privatecert_path` or `privatecertchain_path` is set
+- `privatecert_format` and `privatecertchain_format` must be `pem`, `pkcs12`, or `jks` when set
 
 If validation fails, the process exits before contacting CertWarden.

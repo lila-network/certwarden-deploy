@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"net/http"
@@ -1035,5 +1036,90 @@ certificates:
 
 	if !strings.Contains(output, "key_secret") {
 		t.Fatalf("expected validation error naming key_secret, got: %s", output)
+	}
+}
+
+// e2eBinaryBody is deliberately not valid UTF-8, mirroring a pkcs12 container.
+var e2eBinaryBody = []byte{0x30, 0x82, 0x00, 0xff, 0xfe, 0x00, 0x80, 0x81, 0x01, 0x00, 0xc3, 0x28}
+
+// The whole pipeline must carry binary through unharmed: the format is
+// requested as a query parameter, the body is never decoded as text, and the
+// file lands on disk byte for byte.
+func TestCLI_DeploysBinaryPrivateCertFormatByteExactly(t *testing.T) {
+	var gotFormat string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		name := path.Base(r.URL.Path)
+
+		if strings.HasPrefix(r.URL.Path, constants.PrivateCertApiPath) {
+			gotFormat = r.URL.Query().Get("format")
+			w.Header().Set("Content-Type", "application/octet-stream")
+			_, _ = w.Write(e2eBinaryBody)
+			return
+		}
+
+		switch {
+		case strings.HasPrefix(r.URL.Path, constants.CertificateApiPath):
+			_, _ = w.Write([]byte("cert-body-" + name))
+		case strings.HasPrefix(r.URL.Path, constants.KeyApiPath):
+			_, _ = w.Write([]byte("key-body-" + name))
+		case strings.HasPrefix(r.URL.Path, constants.CaCertificateApiPath):
+			_, _ = w.Write([]byte("ca-body-" + name))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	tmpDir := t.TempDir()
+	binaryPath := buildBinary(t)
+	keystorePath := filepath.Join(tmpDir, "certs", "keystore.p12")
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	writeFile(t, configPath, fmt.Sprintf(`base_url: %q
+certificates:
+  - name: "example.com"
+    cert_secret: "cert-secret"
+    cert_path: %q
+    key_secret: "key-secret"
+    privatecert_path: %q
+    privatecert_format: "pkcs12"
+`, server.URL, filepath.Join(tmpDir, "certs", "cert.pem"), keystorePath))
+
+	runBinaryExpectingExitCode(t, 0, binaryPath, "-c", configPath)
+
+	if gotFormat != "pkcs12" {
+		t.Fatalf("expected the server to be asked for format=pkcs12, got %q", gotFormat)
+	}
+
+	written, err := os.ReadFile(keystorePath)
+	if err != nil {
+		t.Fatalf("failed to read keystore: %v", err)
+	}
+
+	if !bytes.Equal(written, e2eBinaryBody) {
+		t.Fatalf("binary body was corrupted: got % x want % x", written, e2eBinaryBody)
+	}
+}
+
+func TestCLI_RejectsInvalidPrivateCertFormat(t *testing.T) {
+	tmpDir := t.TempDir()
+	binaryPath := buildBinary(t)
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	writeFile(t, configPath, fmt.Sprintf(`base_url: "https://certwarden.example.com"
+certificates:
+  - name: "example.com"
+    cert_secret: "cert-secret"
+    cert_path: %q
+    key_secret: "key-secret"
+    privatecert_path: %q
+    privatecert_format: "der"
+`, filepath.Join(tmpDir, "cert.pem"), filepath.Join(tmpDir, "app.pem")))
+
+	output := runBinaryExpectingExitCode(t, 1, binaryPath, "-c", configPath)
+
+	if !strings.Contains(output, "privatecert_format") {
+		t.Fatalf("expected validation error naming privatecert_format, got: %s", output)
 	}
 }

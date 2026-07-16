@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"mime"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -172,12 +173,14 @@ func artefactsOf(cert configuration.CertificateData) []*GenericCertificate {
 			FilePath: cert.PrivateCertPath,
 			Secret:   combinedSecret(cert),
 			Type:     PrivateCertFile,
+			Format:   cert.PrivateCertFormat,
 		},
 		{
 			Name:     cert.Name,
 			FilePath: cert.PrivateCertChainPath,
 			Secret:   combinedSecret(cert),
 			Type:     PrivateCertChainFile,
+			Format:   cert.PrivateCertChainFormat,
 		},
 	}
 }
@@ -526,9 +529,28 @@ func (c *GenericCertificate) fetchFromServer(logger *slog.Logger, baseUrl string
 		return fmt.Errorf("unsupported file type: %v", c.Type)
 	}
 
-	url := baseUrl + apiPath + c.Name
+	requestURL := baseUrl + apiPath + c.Name
 
-	logger.Debug("Data request URL: "+url, "file-type", c.Type)
+	// pem is the server default, so it is never sent: an unchanged config must
+	// keep producing the exact same request it did before formats existed.
+	//
+	// WARNING, UNVERIFIED: pkcs12 and jks ask CertWarden to build a container
+	// around the certificate. If the server generates that container per
+	// request with a fresh salt/IV, the returned bytes differ on every run even
+	// when the certificate itself did not change. Change detection here is a
+	// SHA-256 over the response body, so in that case every run would look
+	// changed and the configured action would fire on every timer tick.
+	//
+	// This has not been verified against a live CertWarden instance. If it
+	// turns out to be true, change detection for the non-pem formats needs to
+	// move off the raw bytes (for example onto the parsed certificate's
+	// serial or notAfter) rather than being papered over here.
+	// See TestFetchFromServerAssumesDeterministicBinaryBodies.
+	if c.Format != "" && c.Format != constants.FormatPEM {
+		requestURL += "?format=" + url.QueryEscape(c.Format)
+	}
+
+	logger.Debug("Data request URL: "+requestURL, "file-type", c.Type)
 	var transport http.RoundTripper
 
 	if skipInsecure {
@@ -544,7 +566,7 @@ func (c *GenericCertificate) fetchFromServer(logger *slog.Logger, baseUrl string
 		Timeout:   10 * time.Second,
 		Transport: transport,
 	}
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequest("GET", requestURL, nil)
 	if err != nil {
 		return fmt.Errorf("failed to prepare to request data from server: %w", err)
 	}

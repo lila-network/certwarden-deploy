@@ -251,3 +251,77 @@ func contains(messages []string, want string) bool {
 
 	return false
 }
+
+func TestConfigValidationRejectsUnknownDownloadFormat(t *testing.T) {
+	tests := []struct {
+		name        string
+		cert        CertificateData
+		wantMessage string
+	}{
+		{
+			name: "invalid privatecert_format",
+			cert: CertificateData{
+				Name:              "example.com",
+				CertificateSecret: "cert-secret",
+				CertificatePath:   "/tmp/cert.pem",
+				KeySecret:         "key-secret",
+				PrivateCertPath:   "/tmp/app.pem",
+				PrivateCertFormat: "p12",
+			},
+			wantMessage: `Field 'privatecert_format' for certificate example.com must be one of pem, pkcs12, jks!`,
+		},
+		{
+			name: "invalid privatecertchain_format",
+			cert: CertificateData{
+				Name:                   "example.com",
+				CertificateSecret:      "cert-secret",
+				CertificatePath:        "/tmp/cert.pem",
+				KeySecret:              "key-secret",
+				PrivateCertChainPath:   "/tmp/app-fullchain.pem",
+				PrivateCertChainFormat: "der",
+			},
+			wantMessage: `Field 'privatecertchain_format' for certificate example.com must be one of pem, pkcs12, jks!`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := ConfigFileData{
+				BaseURL:      "https://certwarden.example.com",
+				Certificates: []CertificateData{test.cert},
+			}
+
+			err := cfg.IsValid()
+
+			if !contains(err.ErrorMessages, test.wantMessage) {
+				t.Fatalf("expected validation message %q, got %v", test.wantMessage, err.ErrorMessages)
+			}
+		})
+	}
+}
+
+func TestConfigValidationAcceptsEverySupportedDownloadFormat(t *testing.T) {
+	for _, format := range []string{"", "pem", "pkcs12", "jks"} {
+		t.Run("format "+format, func(t *testing.T) {
+			cfg := ConfigFileData{
+				BaseURL: "https://certwarden.example.com",
+				Certificates: []CertificateData{
+					{
+						Name:                   "example.com",
+						CertificateSecret:      "cert-secret",
+						CertificatePath:        "/tmp/cert.pem",
+						KeySecret:              "key-secret",
+						PrivateCertPath:        "/tmp/app.pem",
+						PrivateCertFormat:      format,
+						PrivateCertChainPath:   "/tmp/app-fullchain.pem",
+						PrivateCertChainFormat: format,
+					},
+				},
+			}
+
+			if err := cfg.IsValid(); err.HasMessages() {
+				t.Fatalf("expected format %q to be valid, got %v", format, err.ErrorMessages)
+			}
+		})
+	}
+}

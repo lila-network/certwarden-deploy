@@ -75,6 +75,10 @@ type GenericCertificate struct {
 	// Type of the certificate
 	Type FileType
 
+	// Format is the container requested from the server for the privatecert
+	// and privatecertchain endpoints. Empty means the server default, pem.
+	Format string
+
 	// Bytes fetched from the server
 	serverBytes []byte
 

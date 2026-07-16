@@ -1855,3 +1855,191 @@ func TestHandleCertificatesFailingPrivateCertKeepsOldArtefacts(t *testing.T) {
 
 	assertNoTempFiles(t, dir)
 }
+
+func TestFetchFromServerAppendsFormatQuery(t *testing.T) {
+	tests := []struct {
+		name      string
+		format    string
+		wantQuery string
+	}{
+		{name: "pem is the default and is not sent", format: constants.FormatPEM, wantQuery: ""},
+		{name: "empty is the default and is not sent", format: "", wantQuery: ""},
+		{name: "pkcs12", format: constants.FormatPKCS12, wantQuery: "format=pkcs12"},
+		{name: "jks", format: constants.FormatJKS, wantQuery: "format=jks"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var rawQuery string
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				rawQuery = r.URL.RawQuery
+				_, _ = w.Write([]byte("server-bytes"))
+			}))
+			defer server.Close()
+
+			cert := GenericCertificate{
+				Name:   "example.com",
+				Secret: "cert-secret.key-secret",
+				Type:   PrivateCertFile,
+				Format: test.format,
+			}
+
+			if err := cert.fetchFromServer(testLogger(), server.URL, false); err != nil {
+				t.Fatalf("fetchFromServer returned error: %v", err)
+			}
+
+			if rawQuery != test.wantQuery {
+				t.Fatalf("unexpected query: got %q want %q", rawQuery, test.wantQuery)
+			}
+		})
+	}
+}
+
+// binaryBody is deliberately not valid UTF-8: a pkcs12 or jks container is
+// arbitrary binary, and anything that treats the pipeline as text (a string
+// round-trip, a text-mode write) corrupts it.
+var binaryBody = []byte{0x30, 0x82, 0x00, 0xff, 0xfe, 0x00, 0x80, 0x81, 0x01, 0x00, 0xc3, 0x28}
+
+// ASSUMPTION, NOT VERIFIED AGAINST A LIVE SERVER: CertWarden returns the same
+// bytes for an unchanged certificate in pkcs12/jks form, the way it does for
+// pem.
+//
+// This test pins the behaviour that follows from that assumption: identical
+// binary bodies hash identically, so the second run is Unchanged and the action
+// does not fire. If CertWarden actually rebuilds the container per request with
+// a fresh salt/IV, the assumption is wrong and the real-world behaviour is
+// "changed on every run" - this test will still pass, because it serves stable
+// bytes, but the comment in fetchFromServer and this note are the record that
+// change detection then needs to move off the raw bytes.
+func TestFetchFromServerAssumesDeterministicBinaryBodies(t *testing.T) {
+	t.Cleanup(func() {
+		configuration.DryRun = false
+		configuration.Force = false
+	})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		_, _ = w.Write(binaryBody)
+	}))
+	defer server.Close()
+
+	config := &configuration.ConfigFileData{
+		BaseURL: server.URL,
+		Certificates: []configuration.CertificateData{
+			{
+				Name:              "example.com",
+				CertificateSecret: "cert-secret",
+				CertificatePath:   filepath.Join(t.TempDir(), "cert.pem"),
+				KeySecret:         "key-secret",
+				PrivateCertPath:   filepath.Join(t.TempDir(), "keystore.p12"),
+				PrivateCertFormat: constants.FormatPKCS12,
+			},
+		},
+	}
+
+	first := HandleCertificates(testLogger(), config)
+	if len(first.New) != 1 {
+		t.Fatalf("expected the first run to deploy the certificate: %v", first)
+	}
+
+	second := HandleCertificates(testLogger(), config)
+	if len(second.Unchanged) != 1 {
+		t.Fatalf("identical binary bytes must be detected as unchanged, got %v", second)
+	}
+
+	// The counterpart of the assumption: different bytes must be detected.
+	// Change detection itself works on binary, only the server's determinism is
+	// in question.
+	if !bytes.Equal(binaryBody, []byte{0x30, 0x82, 0x00, 0xff, 0xfe, 0x00, 0x80, 0x81, 0x01, 0x00, 0xc3, 0x28}) {
+		t.Fatal("binaryBody fixture was mutated")
+	}
+}
+
+// Change detection must react to a single flipped bit in an otherwise identical
+// binary container.
+func TestNeedsRolloutDetectsBinaryDifference(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "keystore.p12")
+	if err := os.WriteFile(target, binaryBody, 0600); err != nil {
+		t.Fatalf("failed to seed file: %v", err)
+	}
+
+	changedBody := make([]byte, len(binaryBody))
+	copy(changedBody, binaryBody)
+	changedBody[3] ^= 0x01
+
+	cert := GenericCertificate{
+		FilePath:    target,
+		serverBytes: changedBody,
+	}
+
+	state, err := cert.needsRollout(testLogger())
+	if err != nil {
+		t.Fatalf("needsRollout returned error: %v", err)
+	}
+
+	// the file exists and differs, so this is a modification rather than a
+	// first deployment (#31)
+	if state != Modified {
+		t.Fatalf("expected a one-bit binary difference to be detected: got %v want %v", state, Modified)
+	}
+
+	same := GenericCertificate{
+		FilePath:    target,
+		serverBytes: binaryBody,
+	}
+
+	state, err = same.needsRollout(testLogger())
+	if err != nil {
+		t.Fatalf("needsRollout returned error: %v", err)
+	}
+
+	if state != Unchanged {
+		t.Fatalf("expected identical binary content to be detected as unchanged: got %v", state)
+	}
+}
+
+func TestRolloutWritesBinaryBodyByteExactly(t *testing.T) {
+	t.Cleanup(func() {
+		configuration.DryRun = false
+		configuration.Force = false
+	})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		_, _ = w.Write(binaryBody)
+	}))
+	defer server.Close()
+
+	target := filepath.Join(t.TempDir(), "keystore.p12")
+	cert := GenericCertificate{
+		Name:     "example.com",
+		FilePath: target,
+		Secret:   "cert-secret.key-secret",
+		Type:     PrivateCertFile,
+		Format:   constants.FormatPKCS12,
+	}
+
+	state, err := cert.Prepare(testLogger(), server.URL, false)
+	if err != nil {
+		t.Fatalf("Prepare returned error: %v", err)
+	}
+
+	// nothing exists at the target yet, so the first rollout creates it
+	if state != Created {
+		t.Fatalf("expected the first rollout to report a change: got %v want %v", state, Created)
+	}
+
+	if err := cert.Commit(testLogger()); err != nil {
+		t.Fatalf("Commit returned error: %v", err)
+	}
+
+	written, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("failed to read written file: %v", err)
+	}
+
+	if !bytes.Equal(written, binaryBody) {
+		t.Fatalf("binary body was not written byte-exactly: got % x want % x", written, binaryBody)
+	}
+}

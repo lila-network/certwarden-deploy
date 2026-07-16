@@ -2,7 +2,30 @@ package configuration
 
 import (
 	"regexp"
+	"strings"
+
+	"github.com/lila-network/certwarden-deploy/internal/constants"
 )
+
+// validDownloadFormats lists the containers the privatecerts and
+// privatecertchains endpoints can return.
+var validDownloadFormats = []string{constants.FormatPEM, constants.FormatPKCS12, constants.FormatJKS}
+
+// isValidDownloadFormat reports whether format is empty (meaning the pem
+// default) or one of the supported containers.
+func isValidDownloadFormat(format string) bool {
+	if format == "" {
+		return true
+	}
+
+	for _, valid := range validDownloadFormats {
+		if format == valid {
+			return true
+		}
+	}
+
+	return false
+}
 
 // IsValid tests if the config read from file has all required parameters set.
 //
@@ -51,6 +74,16 @@ func (c *ConfigFileData) IsValid() ConfigValidationError {
 			if cert.PrivateCertChainPath != "" {
 				err.Add(`Field 'key_secret' for certificate ` + cert.Name + " is required when 'privatecertchain_path' is set!")
 			}
+		}
+
+		if !isValidDownloadFormat(cert.PrivateCertFormat) {
+			err.Add(`Field 'privatecert_format' for certificate ` + cert.Name +
+				" must be one of " + strings.Join(validDownloadFormats, ", ") + "!")
+		}
+
+		if !isValidDownloadFormat(cert.PrivateCertChainFormat) {
+			err.Add(`Field 'privatecertchain_format' for certificate ` + cert.Name +
+				" must be one of " + strings.Join(validDownloadFormats, ", ") + "!")
 		}
 
 		re := regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)

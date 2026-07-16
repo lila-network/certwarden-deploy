@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Support for the `privatecerts` and `privatecertchains` download endpoints via the optional `privatecert_path` and `privatecertchain_path` keys (#4)
 - Placeholders `{privatecert_path}`, `{privatecertchain_path}`, `{date}`, `{base_url}`, `{common_name}` and `{cert_id}` (#32)
 - Unrecognised placeholders are now reported with a warning naming the placeholder and the certificate (#32)
+- Optional `privatecert_format` and `privatecertchain_format` keys to download the combined endpoints as `pem`, `pkcs12` or `jks` (#41)
+
+    Change detection hashes the bytes returned by the server. It is unverified whether
+    CertWarden rebuilds `pkcs12`/`jks` containers per request; if it does, every run
+    counts as changed and the action runs on every invocation.
 
 ### Changed
 
