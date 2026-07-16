@@ -1,12 +1,14 @@
 package certificates
 
 import (
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/lila-network/certwarden-deploy/internal/configuration"
@@ -135,5 +137,173 @@ func TestHandleCertificateActionIgnoresWhitespaceAndRunsCommand(t *testing.T) {
 func TestHandleCertificateActionWhitespaceOnlyIsNoop(t *testing.T) {
 	if err := handleCertificateAction("   "); err != nil {
 		t.Fatalf("expected whitespace-only action to be ignored, got error: %v", err)
+	}
+}
+
+func TestRunResultExitCodePrecedence(t *testing.T) {
+	certErr := errors.New("cert boom")
+	actionErr := errors.New("action boom")
+
+	tests := []struct {
+		name   string
+		result RunResult
+		want   int
+	}{
+		{
+			name:   "empty run succeeds",
+			result: RunResult{},
+			want:   ExitSuccess,
+		},
+		{
+			name: "only successes",
+			result: RunResult{
+				Changed:   []string{"example.com"},
+				Unchanged: []string{"example.org"},
+			},
+			want: ExitSuccess,
+		},
+		{
+			name: "certificate failure",
+			result: RunResult{
+				Changed: []string{"example.com"},
+				Failed:  []CertFailure{{Name: "example.org", Type: KeyFile, Err: certErr}},
+			},
+			want: ExitCertificateFailure,
+		},
+		{
+			name: "action failure only",
+			result: RunResult{
+				Changed:      []string{"example.com"},
+				ActionFailed: []ActionFailure{{Name: "example.com", Err: actionErr}},
+			},
+			want: ExitActionFailure,
+		},
+		{
+			name: "certificate failure outranks action failure",
+			result: RunResult{
+				Failed:       []CertFailure{{Name: "example.org", Type: CertificateFile, Err: certErr}},
+				ActionFailed: []ActionFailure{{Name: "example.com", Err: actionErr}},
+			},
+			want: ExitCertificateFailure,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.result.ExitCode(); got != tc.want {
+				t.Fatalf("unexpected exit code: got %d want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestHandleCertificatesRecordsFailuresAndContinues(t *testing.T) {
+	t.Cleanup(func() {
+		configuration.DryRun = false
+		configuration.Force = false
+	})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "broken.example.com") {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_, _ = w.Write([]byte("body-" + filepath.Base(r.URL.Path)))
+	}))
+	defer server.Close()
+
+	tmpDir := t.TempDir()
+	config := &configuration.ConfigFileData{
+		BaseURL: server.URL,
+		Certificates: []configuration.CertificateData{
+			{
+				Name:              "broken.example.com",
+				CertificateSecret: "secret",
+				CertificatePath:   filepath.Join(tmpDir, "broken-cert.pem"),
+			},
+			{
+				Name:              "good.example.com",
+				CertificateSecret: "secret",
+				CertificatePath:   filepath.Join(tmpDir, "good-cert.pem"),
+			},
+		},
+	}
+
+	result := HandleCertificates(testLogger(), config)
+
+	if len(result.Failed) != 1 {
+		t.Fatalf("unexpected failure count: got %d want 1 (%v)", len(result.Failed), result.Failed)
+	}
+
+	if result.Failed[0].Name != "broken.example.com" {
+		t.Fatalf("unexpected failed certificate name: got %q", result.Failed[0].Name)
+	}
+
+	if result.Failed[0].Type != CertificateFile {
+		t.Fatalf("unexpected failed file type: got %v", result.Failed[0].Type)
+	}
+
+	if result.Failed[0].Err == nil {
+		t.Fatal("expected failure to carry an error")
+	}
+
+	// The broken certificate must not stop the healthy one behind it.
+	if len(result.Changed) != 1 || result.Changed[0] != "good.example.com" {
+		t.Fatalf("unexpected changed certificates: got %v", result.Changed)
+	}
+
+	if len(result.New) != 0 {
+		t.Fatalf("New is expected to stay empty until #31: got %v", result.New)
+	}
+
+	if result.ExitCode() != ExitCertificateFailure {
+		t.Fatalf("unexpected exit code: got %d want %d", result.ExitCode(), ExitCertificateFailure)
+	}
+
+	assertFileExists(t, config.Certificates[1].CertificatePath)
+}
+
+func TestHandleCertificatesReportsUnchangedOnSecondRun(t *testing.T) {
+	t.Cleanup(func() {
+		configuration.DryRun = false
+		configuration.Force = false
+	})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("stable-body"))
+	}))
+	defer server.Close()
+
+	config := &configuration.ConfigFileData{
+		BaseURL: server.URL,
+		Certificates: []configuration.CertificateData{
+			{
+				Name:              "example.com",
+				CertificateSecret: "secret",
+				CertificatePath:   filepath.Join(t.TempDir(), "cert.pem"),
+			},
+		},
+	}
+
+	first := HandleCertificates(testLogger(), config)
+	if len(first.Changed) != 1 {
+		t.Fatalf("expected certificate to be reported as changed: got %v", first.Changed)
+	}
+
+	second := HandleCertificates(testLogger(), config)
+	if len(second.Unchanged) != 1 || second.Unchanged[0] != "example.com" {
+		t.Fatalf("expected certificate to be reported as unchanged: got %v", second.Unchanged)
+	}
+
+	if second.ExitCode() != ExitSuccess {
+		t.Fatalf("unexpected exit code: got %d want %d", second.ExitCode(), ExitSuccess)
+	}
+}
+
+func assertFileExists(t *testing.T, path string) {
+	t.Helper()
+
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("expected file %s to exist: %v", path, err)
 	}
 }
