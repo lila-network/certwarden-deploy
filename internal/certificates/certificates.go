@@ -2,6 +2,7 @@ package certificates
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/sha256"
 	"crypto/tls"
 	"errors"
@@ -75,7 +76,7 @@ func HandleCertificates(logger *slog.Logger, config *configuration.ConfigFileDat
 		// if cert OR key changed OR --force
 		if (certOnDiskChanged || keyOnDiskChanged || caOnDiskChanged) || configuration.Force {
 			if configuration.DryRun {
-				logger.Info("DRY-RUN: skipping post-rollout action", "name", cert.Name)
+				logger.Info("DRY-RUN: skipping post-rollout action", "name", cert.Name, "command", cert.Action)
 				continue
 			}
 
@@ -83,7 +84,7 @@ func HandleCertificates(logger *slog.Logger, config *configuration.ConfigFileDat
 				logger.Info("Forcing file system change due to --force", "name", cert.Name)
 			}
 
-			err = handleCertificateAction(cert.Action)
+			err = handleCertificateAction(logger, cert.Action)
 			if err != nil {
 				logger.Error("Failed to execute post-rollout action", "name", cert.Name, "error", err)
 			}
@@ -333,14 +334,97 @@ func (c *GenericCertificate) fetchFromServer(logger *slog.Logger, baseUrl string
 	return nil
 }
 
+// maxActionOutputBytes is the maximum amount of output captured per stream from
+// a post-rollout action. Anything beyond it is dropped so that a runaway action
+// cannot exhaust memory or flood the journal.
+const maxActionOutputBytes = 64 * 1024
+
+// actionOutputTruncationMarker is appended to captured output that hit maxActionOutputBytes.
+const actionOutputTruncationMarker = "... [truncated]"
+
+// boundedBuffer is an io.Writer that keeps at most limit bytes and discards the
+// rest, while remembering that output was dropped.
+type boundedBuffer struct {
+	buf       bytes.Buffer
+	limit     int
+	truncated bool
+}
+
+// Write stores as much of p as the limit allows and reports a full write, so a
+// command is never blocked by the cap.
+func (b *boundedBuffer) Write(p []byte) (int, error) {
+	remaining := b.limit - b.buf.Len()
+	if remaining <= 0 {
+		if len(p) > 0 {
+			b.truncated = true
+		}
+		return len(p), nil
+	}
+
+	if len(p) > remaining {
+		b.buf.Write(p[:remaining])
+		b.truncated = true
+		return len(p), nil
+	}
+
+	b.buf.Write(p)
+	return len(p), nil
+}
+
+// String returns the captured output without trailing newlines, marked as
+// truncated if the limit was reached.
+func (b *boundedBuffer) String() string {
+	out := strings.TrimRight(b.buf.String(), "\n")
+	if b.truncated {
+		out += actionOutputTruncationMarker
+	}
+	return out
+}
+
 // handleCertificateAction executes the user-defined action after successful certificate deployment
-func handleCertificateAction(action string) error {
+func handleCertificateAction(logger *slog.Logger, action string) error {
 	sargs := strings.Fields(action)
 	if len(sargs) == 0 {
 		return nil
 	}
 
+	stdout := &boundedBuffer{limit: maxActionOutputBytes}
+	stderr := &boundedBuffer{limit: maxActionOutputBytes}
+
 	cmd := exec.Command(sargs[0], sargs[1:]...)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+
+	logger.Debug("Executing post-rollout action", "command", action)
+
 	err := cmd.Run()
-	return err
+
+	// stderr is worth surfacing even on success, tools warn there and still exit 0
+	if stderrOutput := stderr.String(); stderrOutput != "" {
+		logger.Error("Post-rollout action wrote to stderr", "command", action, "stderr", stderrOutput)
+	}
+
+	stdoutOutput := stdout.String()
+
+	if err != nil {
+		logArgs := []any{"command", action}
+
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			logArgs = append(logArgs, "exit-code", exitErr.ExitCode())
+		}
+		if stdoutOutput != "" {
+			logArgs = append(logArgs, "stdout", stdoutOutput)
+		}
+		logArgs = append(logArgs, "error", err)
+
+		logger.Error("Post-rollout action failed", logArgs...)
+		return err
+	}
+
+	if stdoutOutput != "" {
+		logger.Debug("Post-rollout action stdout", "command", action, "stdout", stdoutOutput)
+	}
+
+	return nil
 }

@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Migrated repository to GitHub
 - file write procedure got more resilient
 
+### Fixed
+
+- post-rollout action output is no longer discarded, stdout/stderr and the exit code are now logged (#26)
+
 ## [0.2.4] - 2025-07-09
 
 ### Changed
