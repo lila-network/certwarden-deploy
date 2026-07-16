@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -32,8 +33,17 @@ import (
 func HandleCertificates(logger *slog.Logger, config *configuration.ConfigFileData) RunResult {
 	result := RunResult{}
 
+	httpSettings, settingsErr := config.HTTPSettings()
+	if settingsErr.HasMessages() {
+		// IsValid rejects a broken http block long before this runs, so getting
+		// here means a caller skipped validation. Report it and carry on with
+		// the defaults rather than failing every certificate over it.
+		settingsErr.Print(logger)
+		httpSettings = configuration.DefaultHTTPSettings()
+	}
+
 	for _, cert := range config.Certificates {
-		state, failure := rolloutCertificate(logger, config, cert)
+		state, failure := rolloutCertificate(logger, config, cert, httpSettings)
 		if failure != nil {
 			result.Failed = append(result.Failed, *failure)
 			continue
@@ -148,30 +158,34 @@ func actionTriggered(policy configuration.RunOnPolicy, state RolloutState) bool 
 // artefactsOf splits a configured certificate into the individual files it is
 // made of. They are deployed as one unit: a certificate is only usable next to
 // the key it was issued for.
-func artefactsOf(cert configuration.CertificateData) []*GenericCertificate {
+func artefactsOf(cert configuration.CertificateData, httpSettings configuration.HTTPSettings) []*GenericCertificate {
 	return []*GenericCertificate{
 		{
 			Name:     cert.Name,
 			FilePath: cert.CertificatePath,
 			Secret:   cert.CertificateSecret,
+			HTTP:     httpSettings,
 			Type:     CertificateFile,
 		},
 		{
 			Name:     cert.Name,
 			FilePath: cert.KeyPath,
 			Secret:   cert.KeySecret,
+			HTTP:     httpSettings,
 			Type:     KeyFile,
 		},
 		{
 			Name:     cert.Name,
 			FilePath: cert.CaPath,
 			Secret:   cert.CertificateSecret,
+			HTTP:     httpSettings,
 			Type:     CaCertificateFile,
 		},
 		{
 			Name:     cert.Name,
 			FilePath: cert.PrivateCertPath,
 			Secret:   combinedSecret(cert),
+			HTTP:     httpSettings,
 			Type:     PrivateCertFile,
 			Format:   cert.PrivateCertFormat,
 		},
@@ -179,6 +193,7 @@ func artefactsOf(cert configuration.CertificateData) []*GenericCertificate {
 			Name:     cert.Name,
 			FilePath: cert.PrivateCertChainPath,
 			Secret:   combinedSecret(cert),
+			HTTP:     httpSettings,
 			Type:     PrivateCertChainFile,
 			Format:   cert.PrivateCertChainFormat,
 		},
@@ -214,8 +229,9 @@ func rolloutCertificate(
 	logger *slog.Logger,
 	config *configuration.ConfigFileData,
 	cert configuration.CertificateData,
+	httpSettings configuration.HTTPSettings,
 ) (RolloutState, *CertFailure) {
-	artefacts := artefactsOf(cert)
+	artefacts := artefactsOf(cert, httpSettings)
 
 	// Phase 2' (abort): discard whatever is still staged when this returns.
 	// Abort is a no-op for an artefact that staged nothing and for one that was
@@ -571,8 +587,7 @@ func (c *GenericCertificate) fetchFromServer(logger *slog.Logger, baseUrl string
 		return fmt.Errorf("failed to prepare to request data from server: %w", err)
 	}
 
-	req.Header.Set("User-Agent", constants.UserAgent)
-	req.Header.Add(constants.ApiKeyHeaderName, c.Secret)
+	c.applyHeaders(logger, req)
 
 	res, err := client.Do(req)
 	if err != nil {
@@ -614,6 +629,31 @@ func (c *GenericCertificate) fetchFromServer(logger *slog.Logger, baseUrl string
 
 	c.serverBytes = bodyBytes
 	return nil
+}
+
+// applyHeaders sets the headers for a request to the CertWarden server.
+//
+// The configured custom headers go on first and the headers this tool owns go on
+// afterwards, which is what makes X-API-Key impossible to override from the
+// config: a typo in the http block turning every request into a 401 would be a
+// miserable thing to debug. User-Agent is protected the same way.
+//
+// Only header names are logged. The values are typically access tokens.
+func (c *GenericCertificate) applyHeaders(logger *slog.Logger, req *http.Request) {
+	if len(c.HTTP.Headers) > 0 {
+		names := make([]string, 0, len(c.HTTP.Headers))
+
+		for name, value := range c.HTTP.Headers {
+			req.Header.Set(name, value)
+			names = append(names, name)
+		}
+
+		slices.Sort(names)
+		logger.Debug("Applying custom HTTP headers", "file-type", c.Type, "header-names", names)
+	}
+
+	req.Header.Set("User-Agent", constants.UserAgent)
+	req.Header.Set(constants.ApiKeyHeaderName, c.Secret)
 }
 
 // maxLoggedBodyBytes caps how much of an error response body is read for

@@ -106,3 +106,13 @@ certificates:
     # default is new_or_changed
     run_on: "new_or_changed"
 
+
+# Optional block that tunes how requests to the CertWarden server are made
+# http:
+#   # Extra headers sent with every request, for deployments behind an
+#   # authenticating proxy (Cloudflare Access, Authelia, oauth2-proxy, ...).
+#   # Values support the same ${ENV} and file: references as the secrets.
+#   # X-API-Key and User-Agent are owned by this tool and cannot be overridden.
+#   headers:
+#     CF-Access-Client-Id: "${CF_ACCESS_CLIENT_ID}"
+#     CF-Access-Client-Secret: "${CF_ACCESS_CLIENT_SECRET}"

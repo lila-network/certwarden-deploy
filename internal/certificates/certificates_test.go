@@ -565,6 +565,60 @@ func TestFetchFromServerNeverLogsSuccessBody(t *testing.T) {
 	}
 }
 
+// TestFetchFromServerNeverLogsTheSecret is the counterpart to
+// TestFetchFromServerNeverLogsSuccessBody: that one guards the key material
+// coming back from the server, this one guards the API key going out to it.
+//
+// The 401 path is covered on purpose. It is the one place where logging the
+// rejected key looks helpful, and it is exactly where a leak would be worst: an
+// invalid key is still a valid secret.
+func TestFetchFromServerNeverLogsTheSecret(t *testing.T) {
+	const secret = "APIKEYMUSTNEVERAPPEARINTHEJOURNALZZZ"
+
+	tests := []struct {
+		name    string
+		handler http.HandlerFunc
+	}{
+		{
+			name: "success",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte("server-bytes"))
+			},
+		},
+		{
+			name: "unauthorized",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = w.Write([]byte(`{"error":"api key is invalid"}`))
+			},
+		},
+		{
+			name: "server error",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusInternalServerError)
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(tc.handler)
+			defer server.Close()
+
+			var logs bytes.Buffer
+			cert := GenericCertificate{Name: "example.com", Secret: secret, Type: KeyFile}
+
+			// the error is deliberately ignored, what is on trial here is the log
+			_ = cert.fetchFromServer(capturingLogger(&logs), server.URL, false)
+
+			if strings.Contains(logs.String(), secret) {
+				t.Fatalf("api key leaked into log output: %q", logs.String())
+			}
+		})
+	}
+}
+
 func TestFetchFromServerOmitsNonTextualErrorBody(t *testing.T) {
 	var logs bytes.Buffer
 	logger := capturingLogger(&logs)
@@ -2041,5 +2095,135 @@ func TestRolloutWritesBinaryBodyByteExactly(t *testing.T) {
 
 	if !bytes.Equal(written, binaryBody) {
 		t.Fatalf("binary body was not written byte-exactly: got % x want % x", written, binaryBody)
+	}
+}
+
+// TestFetchFromServerSendsConfiguredHeaders covers the Cloudflare Access /
+// Authelia / oauth2-proxy case: the request has to carry whatever the gateway
+// in front of CertWarden demands, or it never reaches CertWarden at all.
+func TestFetchFromServerSendsConfiguredHeaders(t *testing.T) {
+	var got http.Header
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Clone()
+		_, _ = w.Write([]byte("server-bytes"))
+	}))
+	defer server.Close()
+
+	cert := GenericCertificate{
+		Name:   "example.com",
+		Secret: "top-secret",
+		Type:   CertificateFile,
+		HTTP: configuration.HTTPSettings{
+			Headers: map[string]string{
+				"CF-Access-Client-Id":     "client-id",
+				"CF-Access-Client-Secret": "client-secret",
+			},
+		},
+	}
+
+	if err := cert.fetchFromServer(testLogger(), server.URL, false); err != nil {
+		t.Fatalf("fetchFromServer returned error: %v", err)
+	}
+
+	if got.Get("CF-Access-Client-Id") != "client-id" {
+		t.Fatalf("unexpected CF-Access-Client-Id: got %q", got.Get("CF-Access-Client-Id"))
+	}
+
+	if got.Get("CF-Access-Client-Secret") != "client-secret" {
+		t.Fatalf("unexpected CF-Access-Client-Secret: got %q", got.Get("CF-Access-Client-Secret"))
+	}
+
+	// the headers this tool owns must still be intact
+	if got.Get(constants.ApiKeyHeaderName) != "top-secret" {
+		t.Fatalf("unexpected api key: got %q", got.Get(constants.ApiKeyHeaderName))
+	}
+
+	if got.Get("User-Agent") != constants.UserAgent {
+		t.Fatalf("unexpected user agent: got %q", got.Get("User-Agent"))
+	}
+}
+
+// TestFetchFromServerApiKeyHeaderIsNotOverridable pins the ordering that makes a
+// config typo harmless: a run where every request silently 401s because the
+// config clobbered X-API-Key would be a miserable thing to debug.
+
+// TestFetchFromServerApiKeyHeaderIsNotOverridable pins the ordering that makes a
+// config typo harmless: a run where every request silently 401s because the
+// config clobbered X-API-Key would be a miserable thing to debug.
+func TestFetchFromServerApiKeyHeaderIsNotOverridable(t *testing.T) {
+	var got http.Header
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Clone()
+		_, _ = w.Write([]byte("server-bytes"))
+	}))
+	defer server.Close()
+
+	cert := GenericCertificate{
+		Name:   "example.com",
+		Secret: "real-secret",
+		Type:   CertificateFile,
+		HTTP: configuration.HTTPSettings{
+			Headers: map[string]string{
+				constants.ApiKeyHeaderName: "clobbered-by-config",
+				"User-Agent":               "clobbered-by-config",
+			},
+		},
+	}
+
+	if err := cert.fetchFromServer(testLogger(), server.URL, false); err != nil {
+		t.Fatalf("fetchFromServer returned error: %v", err)
+	}
+
+	if got.Get(constants.ApiKeyHeaderName) != "real-secret" {
+		t.Fatalf("config clobbered the api key header: got %q", got.Get(constants.ApiKeyHeaderName))
+	}
+
+	// exactly one value, the config header must not have been appended alongside
+	if values := got.Values(constants.ApiKeyHeaderName); len(values) != 1 {
+		t.Fatalf("expected a single api key header, got %v", values)
+	}
+
+	if got.Get("User-Agent") != constants.UserAgent {
+		t.Fatalf("config clobbered the user agent: got %q", got.Get("User-Agent"))
+	}
+}
+
+// TestFetchFromServerNeverLogsHeaderValues is the security guard for #36: the
+// header values are usually access tokens, so only the names may be logged.
+
+// TestFetchFromServerNeverLogsHeaderValues is the security guard for #36: the
+// header values are usually access tokens, so only the names may be logged.
+func TestFetchFromServerNeverLogsHeaderValues(t *testing.T) {
+	const headerSecret = "HEADERSECRETMUSTNEVERAPPEARINTHEJOURNAL"
+
+	var logs bytes.Buffer
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("server-bytes"))
+	}))
+	defer server.Close()
+
+	cert := GenericCertificate{
+		Name:   "example.com",
+		Secret: "top-secret",
+		Type:   CertificateFile,
+		HTTP: configuration.HTTPSettings{
+			Headers: map[string]string{"CF-Access-Client-Secret": headerSecret},
+		},
+	}
+
+	if err := cert.fetchFromServer(capturingLogger(&logs), server.URL, false); err != nil {
+		t.Fatalf("fetchFromServer returned error: %v", err)
+	}
+
+	if strings.Contains(logs.String(), headerSecret) {
+		t.Fatalf("header value leaked into log output: %q", logs.String())
+	}
+
+	// the name is logged, so a missing header is still diagnosable
+	if !strings.Contains(logs.String(), "CF-Access-Client-Secret") {
+		t.Fatalf("expected the header name to be logged at debug, got %q", logs.String())
 	}
 }

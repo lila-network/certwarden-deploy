@@ -42,6 +42,7 @@ type ConfigFileData struct {
 	Actions                      ActionsConfig     `yaml:"actions"`
 	DefaultCertificateSecret     string            `yaml:"default_cert_secret"`
 	DefaultKeySecret             string            `yaml:"default_key_secret"`
+	HTTP                         HTTPConfig        `yaml:"http"`
 	Certificates                 []CertificateData `yaml:"certificates"`
 }
 
@@ -52,6 +53,15 @@ type ActionsConfig struct {
 	// It is a pointer so an omitted key can be told apart from an explicit
 	// false. Omitted means enabled: see ConfigFileData.ActionsEnabled.
 	Enabled *bool `yaml:"enabled"`
+}
+
+// HTTPConfig holds the optional http block, which tunes how requests to
+// CertWarden are made rather than what is requested.
+type HTTPConfig struct {
+	// Headers are sent with every request. Values support the same ${VAR} and
+	// file: references as the secrets, because a header that a reverse proxy
+	// gates on is usually a secret itself.
+	Headers map[string]string `yaml:"headers"`
 }
 
 // Struct that holds the details of a single managed certificate

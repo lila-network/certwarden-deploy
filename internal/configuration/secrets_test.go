@@ -402,3 +402,78 @@ func TestResolveSecretsReportsBrokenDefaultReference(t *testing.T) {
 		t.Fatalf("expected the message to name the variable, got %q", message)
 	}
 }
+
+// TestResolveSecretsExpandsHeaderValues covers #36: a header a gateway checks is
+// itself a secret, so it takes the same references as cert_secret.
+func TestResolveSecretsExpandsHeaderValues(t *testing.T) {
+	t.Setenv("CF_ACCESS_CLIENT_ID", "env-client-id")
+
+	cfg := ConfigFileData{
+		HTTP: HTTPConfig{
+			Headers: map[string]string{
+				"CF-Access-Client-Id":     "${CF_ACCESS_CLIENT_ID}",
+				"CF-Access-Client-Secret": writeSecretFile(t, "file-client-secret\n"),
+				"X-Literal":               "literal-value",
+			},
+		},
+	}
+
+	assertNoMessages(t, cfg.ResolveSecrets(testLogger()))
+
+	want := map[string]string{
+		"CF-Access-Client-Id":     "env-client-id",
+		"CF-Access-Client-Secret": "file-client-secret",
+		"X-Literal":               "literal-value",
+	}
+
+	for name, wantValue := range want {
+		if got := cfg.HTTP.Headers[name]; got != wantValue {
+			t.Fatalf("unexpected value for %s: got %q want %q", name, got, wantValue)
+		}
+	}
+}
+
+// TestResolveSecretsReportsBrokenHeaderReference makes sure a broken header
+// reference names the header, not just "something failed".
+func TestResolveSecretsReportsBrokenHeaderReference(t *testing.T) {
+	os.Unsetenv("CF_ACCESS_DEFINITELY_UNSET")
+
+	cfg := ConfigFileData{
+		HTTP: HTTPConfig{
+			Headers: map[string]string{"CF-Access-Client-Secret": "${CF_ACCESS_DEFINITELY_UNSET}"},
+		},
+	}
+
+	message := onlyMessage(t, cfg.ResolveSecrets(testLogger()))
+
+	for _, want := range []string{"http.headers.CF-Access-Client-Secret", "CF_ACCESS_DEFINITELY_UNSET"} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("expected message to mention %q, got %q", want, message)
+		}
+	}
+}
+
+// TestResolveSecretsNeverLogsHeaderValues extends the #34 log guard to the
+// header values added in #36.
+func TestResolveSecretsNeverLogsHeaderValues(t *testing.T) {
+	const headerSecret = "HEADERVALUEMUSTNEVERAPPEARINTHEJOURNAL"
+
+	t.Setenv("CF_ACCESS_CLIENT_SECRET", headerSecret)
+
+	cfg := ConfigFileData{
+		HTTP: HTTPConfig{
+			Headers: map[string]string{"CF-Access-Client-Secret": "${CF_ACCESS_CLIENT_SECRET}"},
+		},
+	}
+
+	var logs bytes.Buffer
+	assertNoMessages(t, cfg.ResolveSecrets(capturingLogger(&logs)))
+
+	if cfg.HTTP.Headers["CF-Access-Client-Secret"] != headerSecret {
+		t.Fatalf("precondition failed: header was not resolved, got %q", cfg.HTTP.Headers["CF-Access-Client-Secret"])
+	}
+
+	if strings.Contains(logs.String(), headerSecret) {
+		t.Fatalf("header value leaked into log output: %q", logs.String())
+	}
+}

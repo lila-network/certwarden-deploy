@@ -121,6 +121,10 @@ Optional. Default `cert_secret` for every certificate that does not set its own.
 
 Optional. Default `key_secret` for every certificate that does not set its own.
 
+`http`
+
+Optional. Tunes how requests are made. See [The http block](#the-http-block).
+
 `certificates`
 
 Optional but normally expected. A list of certificate definitions. An empty list is valid, but nothing will be deployed.
@@ -316,6 +320,34 @@ certificates:
 ```
 
 The same shape works for anything that can drop a secret into a file or the environment, such as Vault Agent, SOPS, or a `systemd-creds`-encrypted credential, without templating the whole config file.
+
+## The http block
+
+The optional top-level `http` block tunes how requests to CertWarden are made, rather than what is requested.
+
+```yaml
+http:
+  headers:
+    CF-Access-Client-Id: "${CF_ACCESS_CLIENT_ID}"
+    CF-Access-Client-Secret: "${CF_ACCESS_CLIENT_SECRET}"
+```
+
+### http.headers
+
+Optional. A map of header names to values, sent with every request.
+
+This exists for deployments that put CertWarden behind an authenticating proxy such as Cloudflare Access, Authelia, or oauth2-proxy: without the headers those gateways require, the request never reaches CertWarden at all.
+
+Header values support the same `${VAR}` and `file:` references as the secrets, because a header a gateway checks is usually a secret itself. See [Secrets](#secrets).
+
+Two headers are owned by the tool and cannot be overridden from this block:
+
+- `X-API-Key`: carries the certificate secret
+- `User-Agent`
+
+Configured headers are applied first and these two are set afterwards, so a typo in the block cannot clobber the API key and turn every request into a `401`.
+
+Header **values** are never logged. Debug output lists header names only.
 
 ## Placeholders
 

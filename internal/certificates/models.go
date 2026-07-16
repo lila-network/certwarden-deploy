@@ -1,5 +1,7 @@
 package certificates
 
+import "github.com/lila-network/certwarden-deploy/internal/configuration"
+
 type FileType int
 
 const (
@@ -71,6 +73,10 @@ type GenericCertificate struct {
 	Name     string
 	FilePath string
 	Secret   string
+
+	// HTTP tunes the request made for this artefact. The zero value is usable
+	// and keeps the behaviour this tool had before the http block existed.
+	HTTP configuration.HTTPSettings
 
 	// Type of the certificate
 	Type FileType

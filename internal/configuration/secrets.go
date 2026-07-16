@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -152,8 +153,34 @@ func (c *ConfigFileData) ResolveSecrets(logger *slog.Logger) ConfigValidationErr
 	err := ConfigValidationError{}
 
 	c.resolveCertificateSecrets(&err, logger)
+	c.resolveHeaderValues(&err, logger)
 
 	return err
+}
+
+// resolveHeaderValues expands the values of the configured custom HTTP headers.
+//
+// They go through the same indirection as the secrets on purpose: a header that
+// a reverse proxy gates on (CF-Access-Client-Secret and friends) is a secret,
+// and pinning it as a literal in the config file would defeat the point of #34.
+//
+// Header names are logged at Debug, values never are.
+func (c *ConfigFileData) resolveHeaderValues(err *ConfigValidationError, logger *slog.Logger) {
+	if len(c.HTTP.Headers) == 0 {
+		return
+	}
+
+	names := make([]string, 0, len(c.HTTP.Headers))
+	for name := range c.HTTP.Headers {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+
+	for _, name := range names {
+		c.HTTP.Headers[name] = resolveField(err, "http.headers."+name, "", c.HTTP.Headers[name])
+	}
+
+	logger.Debug("Resolved custom HTTP header values", "header-names", names)
 }
 
 // resolveCertificateSecrets fills in the effective cert_secret/key_secret of

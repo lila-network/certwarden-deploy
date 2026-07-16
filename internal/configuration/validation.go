@@ -76,6 +76,10 @@ func (c *ConfigFileData) IsValid() ConfigValidationError {
 		err.Add(`Field 'base_url' must be an absolute URL including the scheme, got "` + c.BaseURL + `"!`)
 	}
 
+	if _, httpErr := c.HTTPSettings(); httpErr.HasMessages() {
+		err.Merge(httpErr)
+	}
+
 	for _, cert := range c.Certificates {
 		if cert.Name == "" {
 			cert.Name = unnamedCertificate
