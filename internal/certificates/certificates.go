@@ -9,6 +9,7 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"mime"
 	"net/http"
 	"os"
 	"os/exec"
@@ -317,11 +318,25 @@ func (c *GenericCertificate) fetchFromServer(logger *slog.Logger, baseUrl string
 	}(logger)
 
 	if res.StatusCode == http.StatusUnauthorized {
-		logger.Error("API-Key for request is invalid, skipping certificate!", "name", c.Name, "file-type", c.Type)
-		return errors.New("API-Key invalid")
+		body := errorBodyForLog(res)
+		logger.Error(
+			"API-Key for request is invalid, skipping certificate!",
+			appendBodyArg([]any{"name", c.Name, "file-type", c.Type}, body)...,
+		)
+		if body == "" {
+			return errors.New("API-Key invalid")
+		}
+		return fmt.Errorf("API-Key invalid: %v", body)
 	} else if res.StatusCode != http.StatusOK {
-		logger.Error("failed to get data from server", "name", c.Name, "http-response", res.Status, "file-type", c.Type)
-		return fmt.Errorf("got non-success error code from server: %v", res.Status)
+		body := errorBodyForLog(res)
+		logger.Error(
+			"failed to get data from server",
+			appendBodyArg([]any{"name", c.Name, "http-response", res.Status, "file-type", c.Type}, body)...,
+		)
+		if body == "" {
+			return fmt.Errorf("got non-success error code from server: %v", res.Status)
+		}
+		return fmt.Errorf("got non-success error code from server: %v: %v", res.Status, body)
 	}
 
 	bodyBytes, err := io.ReadAll(res.Body)
@@ -331,6 +346,64 @@ func (c *GenericCertificate) fetchFromServer(logger *slog.Logger, baseUrl string
 
 	c.serverBytes = bodyBytes
 	return nil
+}
+
+// maxLoggedBodyBytes caps how much of an error response body is read for
+// logging, so a verbose upstream error page cannot flood the log.
+const maxLoggedBodyBytes = 4 << 10
+
+// errorBodyForLog reads a bounded prefix of a response body and normalises it
+// into a single-line string that can be attached to a log record or an error.
+//
+// It must only ever be called on non-success responses: on success the body is
+// the certificate/key material itself and must never be logged.
+//
+// Returns an empty string if the body is empty, unreadable or not textual.
+func errorBodyForLog(res *http.Response) string {
+	mediaType, _, err := mime.ParseMediaType(res.Header.Get("Content-Type"))
+	if err != nil {
+		return ""
+	}
+
+	isTextual := strings.HasPrefix(mediaType, "text/") ||
+		mediaType == "application/json" ||
+		mediaType == "application/problem+json"
+	if !isTextual {
+		return ""
+	}
+
+	// read one byte past the cap so we can tell a full body from a truncated one
+	bodyBytes, err := io.ReadAll(io.LimitReader(res.Body, maxLoggedBodyBytes+1))
+	if err != nil {
+		return ""
+	}
+
+	truncated := len(bodyBytes) > maxLoggedBodyBytes
+	if truncated {
+		bodyBytes = bodyBytes[:maxLoggedBodyBytes]
+	}
+
+	// collapse newlines and whitespace runs so the log record stays on one line
+	body := strings.Join(strings.Fields(string(bodyBytes)), " ")
+	if body == "" {
+		return ""
+	}
+
+	if truncated {
+		body += " [truncated]"
+	}
+
+	return body
+}
+
+// appendBodyArg appends the server response body to a set of slog arguments,
+// omitting it entirely when there is no usable body to report.
+func appendBodyArg(args []any, body string) []any {
+	if body == "" {
+		return args
+	}
+
+	return append(args, "response-body", body)
 }
 
 // handleCertificateAction executes the user-defined action after successful certificate deployment
