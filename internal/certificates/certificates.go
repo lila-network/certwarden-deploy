@@ -167,6 +167,18 @@ func artefactsOf(cert configuration.CertificateData) []*GenericCertificate {
 			Secret:   cert.CertificateSecret,
 			Type:     CaCertificateFile,
 		},
+		{
+			Name:     cert.Name,
+			FilePath: cert.PrivateCertPath,
+			Secret:   combinedSecret(cert),
+			Type:     PrivateCertFile,
+		},
+		{
+			Name:     cert.Name,
+			FilePath: cert.PrivateCertChainPath,
+			Secret:   combinedSecret(cert),
+			Type:     PrivateCertChainFile,
+		},
 	}
 }
 
@@ -250,7 +262,16 @@ func rolloutCertificate(
 // The staged file is handed over to Commit or Abort through c.tempPath, which
 // is set as soon as the temporary file exists. Every error path out of Prepare
 // therefore leaves the file recorded and removable, never orphaned.
+// combinedSecret builds the API key that the privatecert and privatecertchain
+// endpoints expect.
 //
+// Those two downloads return the certificate and the private key in one
+// response, so CertWarden authenticates them with both secrets at once: the
+// certificate secret and the key secret joined by a dot.
+func combinedSecret(cert configuration.CertificateData) string {
+	return cert.CertificateSecret + "." + cert.KeySecret
+}
+
 // Returns error on error, otherwise the state the artefact ended up in:
 // Created or Modified if it was staged for deployment, Unchanged if it is
 // already up to date.
@@ -497,6 +518,10 @@ func (c *GenericCertificate) fetchFromServer(logger *slog.Logger, baseUrl string
 		apiPath = constants.KeyApiPath
 	case CaCertificateFile:
 		apiPath = constants.CaCertificateApiPath
+	case PrivateCertFile:
+		apiPath = constants.PrivateCertApiPath
+	case PrivateCertChainFile:
+		apiPath = constants.PrivateCertChainApiPath
 	default:
 		return fmt.Errorf("unsupported file type: %v", c.Type)
 	}

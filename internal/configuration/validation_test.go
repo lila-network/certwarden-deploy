@@ -175,3 +175,79 @@ func TestEffectiveRunOnDefaultsToNewOrChanged(t *testing.T) {
 		t.Fatalf("run_on 'all' = %q, want %q", got, RunOnAll)
 	}
 }
+
+// Without a key_secret the combined secret the two endpoints authenticate with
+// cannot be built, so the config must be rejected up front instead of failing
+// with a 401 at runtime.
+func TestConfigValidationRequiresKeySecretForPrivateCertPaths(t *testing.T) {
+	tests := []struct {
+		name        string
+		cert        CertificateData
+		wantMessage string
+	}{
+		{
+			name: "privatecert_path without key_secret",
+			cert: CertificateData{
+				Name:              "example.com",
+				CertificateSecret: "cert-secret",
+				CertificatePath:   "/tmp/cert.pem",
+				PrivateCertPath:   "/tmp/app.pem",
+			},
+			wantMessage: `Field 'key_secret' for certificate example.com is required when 'privatecert_path' is set!`,
+		},
+		{
+			name: "privatecertchain_path without key_secret",
+			cert: CertificateData{
+				Name:                 "example.com",
+				CertificateSecret:    "cert-secret",
+				CertificatePath:      "/tmp/cert.pem",
+				PrivateCertChainPath: "/tmp/app-fullchain.pem",
+			},
+			wantMessage: `Field 'key_secret' for certificate example.com is required when 'privatecertchain_path' is set!`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := ConfigFileData{
+				BaseURL:      "https://certwarden.example.com",
+				Certificates: []CertificateData{test.cert},
+			}
+
+			err := cfg.IsValid()
+
+			if !contains(err.ErrorMessages, test.wantMessage) {
+				t.Fatalf("expected validation message %q, got %v", test.wantMessage, err.ErrorMessages)
+			}
+		})
+	}
+}
+
+// Leaving both new paths unset must stay valid: they are optional and the
+// behaviour without them is unchanged.
+func TestConfigValidationAcceptsMissingPrivateCertPaths(t *testing.T) {
+	cfg := ConfigFileData{
+		BaseURL: "https://certwarden.example.com",
+		Certificates: []CertificateData{
+			{
+				Name:              "example.com",
+				CertificateSecret: "cert-secret",
+				CertificatePath:   "/tmp/cert.pem",
+			},
+		},
+	}
+
+	if err := cfg.IsValid(); err.HasMessages() {
+		t.Fatalf("expected config without private cert paths to be valid, got %v", err.ErrorMessages)
+	}
+}
+
+func contains(messages []string, want string) bool {
+	for _, message := range messages {
+		if message == want {
+			return true
+		}
+	}
+
+	return false
+}

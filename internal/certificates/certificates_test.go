@@ -1597,3 +1597,261 @@ func TestHandleCertificatesEmptyActionIsNotReportedAsSkipped(t *testing.T) {
 		t.Fatalf("expected no skipped actions for a certificate without one: %v", result.ActionSkipped)
 	}
 }
+
+// The privatecert and privatecertchain endpoints authenticate with both
+// secrets joined by a dot. Getting this wrong yields a 401 against a real
+// CertWarden, so the exact shape is pinned here.
+func TestCombinedSecretJoinsCertAndKeySecretWithDot(t *testing.T) {
+	cert := configuration.CertificateData{
+		CertificateSecret: "cert-secret",
+		KeySecret:         "key-secret",
+	}
+
+	if got := combinedSecret(cert); got != "cert-secret.key-secret" {
+		t.Fatalf("unexpected combined secret: got %q want %q", got, "cert-secret.key-secret")
+	}
+}
+
+func TestFetchFromServerUsesPrivateCertEndpoints(t *testing.T) {
+	tests := []struct {
+		name     string
+		fileType FileType
+		wantPath string
+	}{
+		{name: "privatecert", fileType: PrivateCertFile, wantPath: constants.PrivateCertApiPath + "example.com"},
+		{name: "privatecertchain", fileType: PrivateCertChainFile, wantPath: constants.PrivateCertChainApiPath + "example.com"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var requestedPath string
+			var apiKey string
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requestedPath = r.URL.Path
+				apiKey = r.Header.Get(constants.ApiKeyHeaderName)
+				_, _ = w.Write([]byte("server-bytes"))
+			}))
+			defer server.Close()
+
+			cert := GenericCertificate{
+				Name:   "example.com",
+				Secret: "cert-secret.key-secret",
+				Type:   test.fileType,
+			}
+
+			if err := cert.fetchFromServer(testLogger(), server.URL, false); err != nil {
+				t.Fatalf("fetchFromServer returned error: %v", err)
+			}
+
+			if requestedPath != test.wantPath {
+				t.Fatalf("unexpected request path: got %q want %q", requestedPath, test.wantPath)
+			}
+
+			if apiKey != "cert-secret.key-secret" {
+				t.Fatalf("unexpected api key: got %q", apiKey)
+			}
+		})
+	}
+}
+
+// A config that sets the new paths must fetch both new endpoints with the
+// combined secret, and must still deploy the classic three artefacts.
+func TestHandleCertificatesRollsOutPrivateCertEndpoints(t *testing.T) {
+	t.Cleanup(func() {
+		configuration.DryRun = false
+		configuration.Force = false
+	})
+
+	requestedKeys := map[string]string{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestedKeys[r.URL.Path] = r.Header.Get(constants.ApiKeyHeaderName)
+		_, _ = w.Write([]byte("body-" + r.URL.Path))
+	}))
+	defer server.Close()
+
+	tmpDir := t.TempDir()
+	privateCertPath := filepath.Join(tmpDir, "app.pem")
+	privateCertChainPath := filepath.Join(tmpDir, "app-fullchain.pem")
+
+	config := &configuration.ConfigFileData{
+		BaseURL: server.URL,
+		Certificates: []configuration.CertificateData{
+			{
+				Name:                 "example.com",
+				CertificateSecret:    "cert-secret",
+				CertificatePath:      filepath.Join(tmpDir, "cert.pem"),
+				KeySecret:            "key-secret",
+				KeyPath:              filepath.Join(tmpDir, "key.pem"),
+				PrivateCertPath:      privateCertPath,
+				PrivateCertChainPath: privateCertChainPath,
+			},
+		},
+	}
+
+	result := HandleCertificates(testLogger(), config)
+
+	if len(result.Failed) != 0 {
+		t.Fatalf("unexpected failures: %v", result.Failed)
+	}
+
+	assertFileExists(t, privateCertPath)
+	assertFileExists(t, privateCertChainPath)
+
+	for _, apiPath := range []string{constants.PrivateCertApiPath, constants.PrivateCertChainApiPath} {
+		gotKey, ok := requestedKeys[apiPath+"example.com"]
+		if !ok {
+			t.Fatalf("endpoint %q was never requested, got %v", apiPath, requestedKeys)
+		}
+
+		if gotKey != "cert-secret.key-secret" {
+			t.Fatalf("endpoint %q used api key %q, want the combined secret", apiPath, gotKey)
+		}
+	}
+
+	// The classic endpoints keep using the plain certificate secret.
+	if got := requestedKeys[constants.CertificateApiPath+"example.com"]; got != "cert-secret" {
+		t.Fatalf("certificate endpoint used api key %q, want %q", got, "cert-secret")
+	}
+}
+
+// Omitting the new paths must behave exactly like before they existed: the two
+// endpoints are never contacted.
+func TestHandleCertificatesSkipsOmittedPrivateCertPaths(t *testing.T) {
+	t.Cleanup(func() {
+		configuration.DryRun = false
+		configuration.Force = false
+	})
+
+	var requestedPaths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestedPaths = append(requestedPaths, r.URL.Path)
+		_, _ = w.Write([]byte("body"))
+	}))
+	defer server.Close()
+
+	config := &configuration.ConfigFileData{
+		BaseURL: server.URL,
+		Certificates: []configuration.CertificateData{
+			{
+				Name:              "example.com",
+				CertificateSecret: "cert-secret",
+				CertificatePath:   filepath.Join(t.TempDir(), "cert.pem"),
+			},
+		},
+	}
+
+	result := HandleCertificates(testLogger(), config)
+
+	if len(result.Failed) != 0 {
+		t.Fatalf("unexpected failures: %v", result.Failed)
+	}
+
+	for _, path := range requestedPaths {
+		if strings.HasPrefix(path, constants.PrivateCertApiPath) || strings.HasPrefix(path, constants.PrivateCertChainApiPath) {
+			t.Fatalf("unset path must not be fetched, but %q was requested", path)
+		}
+	}
+}
+
+func TestHandleCertificatesRecordsPrivateCertFailureWithFileType(t *testing.T) {
+	t.Cleanup(func() {
+		configuration.DryRun = false
+		configuration.Force = false
+	})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, constants.PrivateCertApiPath) {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_, _ = w.Write([]byte("body"))
+	}))
+	defer server.Close()
+
+	tmpDir := t.TempDir()
+	config := &configuration.ConfigFileData{
+		BaseURL: server.URL,
+		Certificates: []configuration.CertificateData{
+			{
+				Name:              "example.com",
+				CertificateSecret: "cert-secret",
+				CertificatePath:   filepath.Join(tmpDir, "cert.pem"),
+				KeySecret:         "key-secret",
+				PrivateCertPath:   filepath.Join(tmpDir, "app.pem"),
+			},
+		},
+	}
+
+	result := HandleCertificates(testLogger(), config)
+
+	if len(result.Failed) != 1 {
+		t.Fatalf("unexpected failure count: got %d want 1 (%v)", len(result.Failed), result.Failed)
+	}
+
+	if result.Failed[0].Type != PrivateCertFile {
+		t.Fatalf("unexpected failed file type: got %v want %v", result.Failed[0].Type, PrivateCertFile)
+	}
+
+	if result.ExitCode() != ExitCertificateFailure {
+		t.Fatalf("unexpected exit code: got %d want %d", result.ExitCode(), ExitCertificateFailure)
+	}
+}
+
+func TestFileTypeStringCoversPrivateCertTypes(t *testing.T) {
+	if got := PrivateCertFile.String(); got != "privatecert" {
+		t.Fatalf("unexpected PrivateCertFile string: got %q", got)
+	}
+
+	if got := PrivateCertChainFile.String(); got != "privatecertchain" {
+		t.Fatalf("unexpected PrivateCertChainFile string: got %q", got)
+	}
+}
+
+// TestHandleCertificatesFailingPrivateCertKeepsOldArtefacts is the #28 guard for
+// the artefacts added by #4.
+//
+// The combined endpoints are part of the same certificate as the classic three,
+// so a privatecert that cannot be fetched must abort the whole set: the old
+// certificate, key and CA have to survive a failed run untouched. Rolling the
+// new artefacts out on their own path would reintroduce exactly the
+// publish-as-you-go bug #28 removed, one endpoint later.
+func TestHandleCertificatesFailingPrivateCertKeepsOldArtefacts(t *testing.T) {
+	t.Cleanup(func() {
+		configuration.DryRun = false
+		configuration.Force = false
+	})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, constants.PrivateCertApiPath) {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		_, _ = w.Write([]byte("new-body"))
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	config := certConfig(server.URL, dir, "example.com")
+	config.Certificates[0].KeySecret = "key-secret"
+	config.Certificates[0].PrivateCertPath = filepath.Join(dir, "example.com-app.pem")
+
+	seedFile(t, config.Certificates[0].CertificatePath, "old-cert-body", 0644)
+	seedFile(t, config.Certificates[0].KeyPath, "old-key-body", 0600)
+	seedFile(t, config.Certificates[0].CaPath, "old-ca-body", 0644)
+
+	result := HandleCertificates(testLogger(), config)
+
+	assertSingleFailure(t, result, "example.com", PrivateCertFile)
+
+	// the artefacts that fetched fine must still not have been published
+	assertFileContents(t, config.Certificates[0].CertificatePath, "old-cert-body")
+	assertFileContents(t, config.Certificates[0].KeyPath, "old-key-body")
+	assertFileContents(t, config.Certificates[0].CaPath, "old-ca-body")
+
+	if _, err := os.Stat(config.Certificates[0].PrivateCertPath); !os.IsNotExist(err) {
+		t.Fatalf("expected the private cert to be absent, got err=%v", err)
+	}
+
+	assertNoTempFiles(t, dir)
+}

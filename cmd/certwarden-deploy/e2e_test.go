@@ -195,6 +195,10 @@ func runBinaryExpectingExitCode(t *testing.T, wantCode int, binaryPath string, a
 }
 
 // e2eCert describes one certificate entry for the generated config file.
+//
+// privateCertPath and privateCertChainPath are only written to the config file
+// when set, so the common case stays byte-identical to a config that predates
+// those keys.
 type e2eCert struct {
 	name string
 
@@ -209,9 +213,11 @@ type e2eCert struct {
 	// default policy is exercised.
 	runOn string
 
-	certPath string
-	keyPath  string
-	caPath   string
+	certPath             string
+	keyPath              string
+	caPath               string
+	privateCertPath      string
+	privateCertChainPath string
 }
 
 func newE2ECert(tmpDir string, name string) e2eCert {
@@ -247,6 +253,10 @@ func startCertServer(t *testing.T, unauthorized ...string) *httptest.Server {
 			_, _ = w.Write([]byte("key-body-" + name))
 		case strings.HasPrefix(r.URL.Path, constants.CaCertificateApiPath):
 			_, _ = w.Write([]byte("ca-body-" + name))
+		case strings.HasPrefix(r.URL.Path, constants.PrivateCertApiPath):
+			_, _ = w.Write([]byte("privatecert-body-" + name))
+		case strings.HasPrefix(r.URL.Path, constants.PrivateCertChainApiPath):
+			_, _ = w.Write([]byte("privatecertchain-body-" + name))
 		default:
 			http.NotFound(w, r)
 		}
@@ -300,6 +310,14 @@ func writeE2EConfigWithActions(t *testing.T, configPath string, baseURL string, 
 
 		if cert.runOn != "" {
 			fmt.Fprintf(&b, "    run_on: %q\n", cert.runOn)
+		}
+
+		if cert.privateCertPath != "" {
+			fmt.Fprintf(&b, "    privatecert_path: %q\n", cert.privateCertPath)
+		}
+
+		if cert.privateCertChainPath != "" {
+			fmt.Fprintf(&b, "    privatecertchain_path: %q\n", cert.privateCertChainPath)
 		}
 	}
 
@@ -963,4 +981,59 @@ func findOutputLine(t *testing.T, output string, substr string) string {
 
 	t.Fatalf("no output line containing %q found in:\n%s", substr, output)
 	return ""
+}
+
+// The two combined endpoints must flow through the same rollout path as the
+// classic three, including the action that fires once on first deployment and
+// not again on an unchanged second run.
+func TestCLI_DeploysPrivateCertEndpoints(t *testing.T) {
+	server := startCertServer(t)
+
+	tmpDir := t.TempDir()
+	binaryPath := buildBinary(t)
+	actionMarker := filepath.Join(tmpDir, "action.log")
+	actionScript := filepath.Join(tmpDir, "post-deploy.sh")
+	writeExecutableFile(t, actionScript, fmt.Sprintf("#!/bin/sh\nprintf 'run\\n' >> %q\n", actionMarker))
+
+	cert := newE2ECert(tmpDir, "example.com")
+	cert.action = actionScript
+	cert.privateCertPath = filepath.Join(tmpDir, "certs", "example.com.pem")
+	cert.privateCertChainPath = filepath.Join(tmpDir, "certs", "example.com-fullchain.pem")
+
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	writeE2EConfig(t, configPath, server.URL, cert)
+
+	runBinaryExpectingExitCode(t, 0, binaryPath, "-c", configPath)
+
+	assertFileContents(t, cert.privateCertPath, "privatecert-body-example.com")
+	assertFileContents(t, cert.privateCertChainPath, "privatecertchain-body-example.com")
+	assertActionCount(t, actionMarker, 1)
+
+	runBinaryExpectingExitCode(t, 0, binaryPath, "-c", configPath)
+	assertActionCount(t, actionMarker, 1)
+}
+
+// Setting privatecert_path without a key_secret cannot work, so the tool must
+// refuse to start rather than fail against the server.
+
+// Setting privatecert_path without a key_secret cannot work, so the tool must
+// refuse to start rather than fail against the server.
+func TestCLI_RejectsPrivateCertPathWithoutKeySecret(t *testing.T) {
+	tmpDir := t.TempDir()
+	binaryPath := buildBinary(t)
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	writeFile(t, configPath, fmt.Sprintf(`base_url: "https://certwarden.example.com"
+certificates:
+  - name: "example.com"
+    cert_secret: "cert-secret"
+    cert_path: %q
+    privatecert_path: %q
+`, filepath.Join(tmpDir, "cert.pem"), filepath.Join(tmpDir, "app.pem")))
+
+	output := runBinaryExpectingExitCode(t, 1, binaryPath, "-c", configPath)
+
+	if !strings.Contains(output, "key_secret") {
+		t.Fatalf("expected validation error naming key_secret, got: %s", output)
+	}
 }

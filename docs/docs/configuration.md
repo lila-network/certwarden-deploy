@@ -44,6 +44,18 @@ certificates:
     run_on: "new_or_changed"
 ```
 
+## Download Endpoints
+
+Each path key maps onto one CertWarden download endpoint:
+
+| Config key | Endpoint | Contents |
+| --- | --- | --- |
+| `cert_path` | `/certwarden/api/v1/download/certificates/` | certificate |
+| `key_path` | `/certwarden/api/v1/download/privatekeys/` | private key |
+| `ca_path` | `/certwarden/api/v1/download/certrootchains/` | CA chain |
+| `privatecert_path` | `/certwarden/api/v1/download/privatecerts/` | certificate + private key |
+| `privatecertchain_path` | `/certwarden/api/v1/download/privatecertchains/` | certificate + private key + CA chain |
+
 ## Top-level Keys
 
 `base_url`
@@ -115,6 +127,30 @@ Optional. Destination path for the CA chain PEM file.
 
 If this value is left empty, CA chain rollout is skipped for that certificate.
 
+`privatecert_path`
+
+Optional. Destination path for the combined certificate and private key, as served by the `privatecerts` endpoint. Useful for servers such as HAProxy that expect both in one file.
+
+If this value is left empty, that download is skipped for the certificate.
+
+Requires `key_secret`: this endpoint authenticates with `cert_secret` and `key_secret` joined by a dot, so the combined secret cannot be built without it.
+
+```yaml
+privatecert_path: "/etc/haproxy/certs/app.pem"
+```
+
+`privatecertchain_path`
+
+Optional. Destination path for the combined certificate, private key, and CA chain, as served by the `privatecertchains` endpoint.
+
+If this value is left empty, that download is skipped for the certificate.
+
+Requires `key_secret`, for the same reason as `privatecert_path`.
+
+```yaml
+privatecertchain_path: "/etc/haproxy/certs/app-fullchain.pem"
+```
+
 `action`
 
 Optional. Command to run after a rollout changed any managed file for that certificate, or when `--force` is used.
@@ -132,7 +168,7 @@ action:
   - nginx
 ```
 
-If the key is present it must not be blank: an `action` that is an empty string, a whitespace-only string, or an empty list is rejected at startup. Leave the key out entirely if no command should run.
+If the key is present but blank -- an empty string, a whitespace-only string, or an empty list -- nothing runs and a warning is logged when the action would have fired. It is not a startup error: one blank action line must not stop every other certificate in the config from being deployed. Leave the key out entirely if no command should run.
 
 `run_on`
 
@@ -146,7 +182,7 @@ An unknown value is rejected at startup.
 
 Available placeholders:
 
-- `{name}`: available in `cert_path`, `key_path`, `ca_path`, and `action`
+- `{name}`: available in `cert_path`, `key_path`, `ca_path`, `privatecert_path`, `privatecertchain_path`, and `action`
 - `{cert_path}`: available in `action`
 - `{key_path}`: available in `action`
 - `{ca_path}`: available in `action`
@@ -250,7 +286,7 @@ certificates:
 
 For each configured certificate, the binary:
 
-1. downloads the current certificate, private key, and optional CA chain from CertWarden
+1. downloads the current certificate, private key, and the optional CA chain, combined certificate, and combined certificate chain from CertWarden
 2. compares the downloaded bytes with the existing files on disk
 3. writes changed files atomically through a temporary file and rename
 4. creates missing parent directories automatically
@@ -302,7 +338,7 @@ Current startup validation checks these conditions before deployment begins:
 - every configured certificate must have a non-empty `cert_secret`
 - every configured certificate must have a non-empty `cert_path`
 - `name` may only contain letters, numbers, dots, underscores, and hyphens
-- `action`, if the key is present, must not be blank
 - `run_on`, if set, must be one of `new`, `changed`, `new_or_changed`, `all`
+- `key_secret` must be set when `privatecert_path` or `privatecertchain_path` is set
 
 If validation fails, the process exits before contacting CertWarden.

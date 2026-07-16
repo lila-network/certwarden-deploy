@@ -10,6 +10,8 @@ func (c *ConfigFileData) SubstituteKeys(logger *slog.Logger) {
 		c.Certificates[index].CertificatePath = strings.ReplaceAll(cert.CertificatePath, "{name}", c.Certificates[index].Name)
 		c.Certificates[index].KeyPath = strings.ReplaceAll(cert.KeyPath, "{name}", c.Certificates[index].Name)
 		c.Certificates[index].CaPath = strings.ReplaceAll(cert.CaPath, "{name}", c.Certificates[index].Name)
+		c.Certificates[index].PrivateCertPath = strings.ReplaceAll(cert.PrivateCertPath, "{name}", c.Certificates[index].Name)
+		c.Certificates[index].PrivateCertChainPath = strings.ReplaceAll(cert.PrivateCertChainPath, "{name}", c.Certificates[index].Name)
 
 		// The paths above are already substituted at this point, so the path
 		// placeholders below expand to the final on-disk paths.

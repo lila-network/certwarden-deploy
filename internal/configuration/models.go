@@ -48,7 +48,16 @@ type CertificateData struct {
 	KeySecret         string `yaml:"key_secret"`
 	KeyPath           string `yaml:"key_path"`
 	CaPath            string `yaml:"ca_path"`
-	Action            Action `yaml:"action"`
+
+	// PrivateCertPath is the destination for the combined certificate and
+	// private key. Optional: an empty value skips that download entirely.
+	PrivateCertPath string `yaml:"privatecert_path"`
+
+	// PrivateCertChainPath is the destination for the combined certificate,
+	// private key and CA chain. Optional, same as PrivateCertPath.
+	PrivateCertChainPath string `yaml:"privatecertchain_path"`
+
+	Action Action `yaml:"action"`
 
 	// RunOn selects when Action is executed. Empty means DefaultRunOn.
 	// Validated by IsValid, read through EffectiveRunOn.

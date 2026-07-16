@@ -108,3 +108,28 @@ func TestStringSubstitutionInListAction(t *testing.T) {
 		t.Fatalf("Action.Command = %q, want it to stay empty for the list form", cfg.Certificates[0].Action.Command)
 	}
 }
+
+// {name} must work in the two new path keys exactly like it does in the
+// existing ones.
+func TestStringSubstitutionInPrivateCertPaths(t *testing.T) {
+	cfg := ConfigFileData{
+		Certificates: []CertificateData{
+			{
+				Name:                 "example.com",
+				CertificatePath:      "/fake/path/{name}-cert.pem",
+				PrivateCertPath:      "/fake/path/{name}.pem",
+				PrivateCertChainPath: "/fake/path/{name}-fullchain.pem",
+			},
+		},
+	}
+
+	cfg.SubstituteKeys(nil)
+
+	if got := cfg.Certificates[0].PrivateCertPath; got != "/fake/path/example.com.pem" {
+		t.Fatalf(`PrivateCertPath = %q, want "/fake/path/example.com.pem"`, got)
+	}
+
+	if got := cfg.Certificates[0].PrivateCertChainPath; got != "/fake/path/example.com-fullchain.pem" {
+		t.Fatalf(`PrivateCertChainPath = %q, want "/fake/path/example.com-fullchain.pem"`, got)
+	}
+}

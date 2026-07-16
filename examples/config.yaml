@@ -42,6 +42,14 @@ certificates:
     # path where to save the ca certificate
     ca_path: "/path/to/test-ca-cert.pem"
 
+    # path where to save the certificate and the private key in one file
+    # optional, needs cert_secret and key_secret to be set
+    privatecert_path: "/etc/haproxy/certs/app.pem"
+
+    # path where to save the certificate, the private key and the ca chain in one file
+    # optional, needs cert_secret and key_secret to be set
+    privatecertchain_path: "/etc/haproxy/certs/app-fullchain.pem"
+
     # action to run when certificate was updated or --force is on
     # a string is run through /bin/sh, so pipes, redirects, && and quoting work
     action: "/usr/bin/systemctl reload caddy"

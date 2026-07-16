@@ -40,6 +40,19 @@ func (c *ConfigFileData) IsValid() ConfigValidationError {
 			err.Add(`Field 'run_on' for certificate ` + cert.Name + ` must be one of 'new', 'changed', 'new_or_changed' or 'all', got '` + cert.RunOn + `'!`)
 		}
 
+		// The privatecert and privatecertchain endpoints authenticate with the
+		// certificate secret and the key secret joined by a dot, so without a
+		// key_secret the combined secret cannot be built at all.
+		if cert.KeySecret == "" {
+			if cert.PrivateCertPath != "" {
+				err.Add(`Field 'key_secret' for certificate ` + cert.Name + " is required when 'privatecert_path' is set!")
+			}
+
+			if cert.PrivateCertChainPath != "" {
+				err.Add(`Field 'key_secret' for certificate ` + cert.Name + " is required when 'privatecertchain_path' is set!")
+			}
+		}
+
 		re := regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
 		if !re.MatchString(cert.Name) {
 			err.Add(`Field 'name' for certificate may only contain -_. and alphanumeric characters!`)

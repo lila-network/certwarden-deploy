@@ -6,6 +6,13 @@ const (
 	CertificateFile FileType = iota
 	KeyFile
 	CaCertificateFile
+
+	// PrivateCertFile is the certificate and its private key in one file.
+	PrivateCertFile
+
+	// PrivateCertChainFile is the certificate, its private key and the CA
+	// chain in one file.
+	PrivateCertChainFile
 )
 
 func (file FileType) String() string {
@@ -16,6 +23,10 @@ func (file FileType) String() string {
 		return "key"
 	case CaCertificateFile:
 		return "ca"
+	case PrivateCertFile:
+		return "privatecert"
+	case PrivateCertChainFile:
+		return "privatecertchain"
 	}
 
 	return "unknown"
