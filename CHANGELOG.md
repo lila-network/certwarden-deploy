@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `action` accepts a list of arguments, which is executed directly without a shell (#29)
 - per-certificate `run_on` selects when the action runs: `new`, `changed`, `new_or_changed` (default) or `all` (#31)
 - `actions.enabled` and `--no-actions` deploy the files but skip every post-rollout action. Actions stay on by default (#46)
+- every run now ends with a summary record counting new, changed, unchanged, failed, action_failed and action_skipped certificates (#30)
 
 ### Changed
 

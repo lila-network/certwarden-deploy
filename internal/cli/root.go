@@ -67,6 +67,7 @@ func handleRootCmd(cmd *cobra.Command, args []string) {
 	}
 
 	result := certificates.HandleCertificates(log, config)
+	result.LogSummary(log)
 
 	// Always exit explicitly, including on success: the exit code is the only
 	// signal a supervisor (systemd, cron, CI) gets about a run that partially

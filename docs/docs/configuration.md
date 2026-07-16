@@ -18,7 +18,7 @@ The binary accepts the following flags:
 - `-d, --dry-run`: show what would change without writing files. This also enables debug logging
 - `-f, --force`: write files and run actions even if the content on disk is unchanged
 - `--no-actions`: deploy the files but skip every post-rollout action. Overrides `actions.enabled` in the config file. Unlike `--dry-run`, files are still written
-- `-q, --quiet`: only print errors
+- `-q, --quiet`: only print errors. A successful run prints nothing at all, a failing one still prints the run summary and every failure
 - `-v, --verbose`: enable debug logging
 - `--version`: print the version and exit
 
@@ -256,6 +256,42 @@ For each configured certificate, the binary:
 4. creates missing parent directories automatically
 5. preserves the existing file mode when replacing a file; newly created files default to mode `0644`
 6. runs the configured `action` if the certificate's outcome matches `run_on`, or if `--force` was used, unless actions are disabled for the run
+
+## Run Summary and Exit Codes
+
+Every run ends with a single summary record, followed by one record per failure:
+
+```text
+INFO  run summary  new=2 changed=0 unchanged=5 failed=1 action_failed=0 action_skipped=0 total=8
+ERROR certificate failed  name=api.example.com file-type=key error="API-Key invalid"
+```
+
+The fields are:
+
+| Field            | Meaning                                                                    |
+| ---------------- | -------------------------------------------------------------------------- |
+| `new`            | certificates where at least one file did not exist before this run          |
+| `changed`        | certificates where nothing was created but at least one file was rewritten  |
+| `unchanged`      | certificates that were already up to date                                   |
+| `failed`         | certificates that could not be rolled out                                   |
+| `action_failed`  | actions that exited non-zero                                                |
+| `action_skipped` | actions that were suppressed because actions are disabled for the run       |
+| `total`          | certificates attempted: `new` + `changed` + `unchanged` + `failed`          |
+
+Every count is always present, including zeroes, so the record has a stable shape and can be parsed or alerted on. `action_failed` and `action_skipped` are not part of `total`: those certificates were still deployed and are already counted above.
+
+Under `--dry-run` the summary is prefixed with `DRY-RUN:` and reports what the run would have done.
+
+The process exit code is:
+
+| Code | Meaning                                                                |
+| ---- | ---------------------------------------------------------------------- |
+| `0`  | every certificate was processed and every triggered action succeeded    |
+| `1`  | configuration or setup error, nothing was deployed                      |
+| `2`  | one or more certificates failed to roll out                             |
+| `3`  | every certificate rolled out, but one or more actions failed            |
+
+A certificate failure outranks an action failure: if both happened, the run exits `2`. A skipped action never affects the exit code.
 
 ## Validation Notes
 

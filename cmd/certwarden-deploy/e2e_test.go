@@ -790,3 +790,170 @@ func TestCLI_SuppressedActionDoesNotExitThree(t *testing.T) {
 	runBinaryExpectingExitCode(t, 0, binaryPath, "--no-actions", "-c", configPath)
 	assertFileContents(t, cert.certPath, "cert-body-example.com")
 }
+
+// TestCLI_SummaryReportsMixedRun checks the record an operator sees at the end
+// of a real run with a bit of everything in it.
+func TestCLI_SummaryReportsMixedRun(t *testing.T) {
+	server := startCertServer(t, "broken.example.com")
+
+	tmpDir := t.TempDir()
+	binaryPath := buildBinary(t)
+
+	broken := newE2ECert(tmpDir, "broken.example.com")
+
+	unchanged := newE2ECert(tmpDir, "unchanged.example.com")
+	fresh := newE2ECert(tmpDir, "fresh.example.com")
+
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	writeE2EConfig(t, configPath, server.URL, broken, unchanged, fresh)
+
+	// first run deploys unchanged.example.com and fresh.example.com
+	runBinaryExpectingExitCode(t, 2, binaryPath, "-c", configPath)
+
+	// wipe one of them so the second run has a new one and an unchanged one
+	for _, path := range []string{fresh.certPath, fresh.keyPath, fresh.caPath} {
+		if err := os.Remove(path); err != nil {
+			t.Fatalf("failed to remove %s: %v", path, err)
+		}
+	}
+
+	output := runBinaryExpectingExitCode(t, 2, binaryPath, "-c", configPath)
+
+	summary := findOutputLine(t, output, "run summary")
+	for _, want := range []string{
+		"level=INFO",
+		"new=1",
+		"changed=0",
+		"unchanged=1",
+		"failed=1",
+		"action_failed=0",
+		"action_skipped=0",
+		"total=3",
+	} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("expected %q in the summary, got: %s\nfull output:\n%s", want, summary, output)
+		}
+	}
+
+	failure := findOutputLine(t, output, "msg=\"certificate failed\"")
+	for _, want := range []string{"level=ERROR", "name=broken.example.com", "file-type=certificate"} {
+		if !strings.Contains(failure, want) {
+			t.Fatalf("expected %q in the failure line, got: %s", want, failure)
+		}
+	}
+}
+
+// TestCLI_QuietRunIsSilentOnSuccess and its failing counterpart below are the
+// --quiet contract: nothing at all when the run worked, the summary and the
+// failures when it did not.
+func TestCLI_QuietRunIsSilentOnSuccess(t *testing.T) {
+	server := startCertServer(t)
+
+	tmpDir := t.TempDir()
+	binaryPath := buildBinary(t)
+	marker := filepath.Join(tmpDir, "action.log")
+	actionScript := filepath.Join(tmpDir, "post-deploy.sh")
+	writeExecutableFile(t, actionScript, fmt.Sprintf("#!/bin/sh\nprintf 'run\\n' >> %q\n", marker))
+
+	cert := newE2ECert(tmpDir, "example.com")
+	cert.action = actionScript
+
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	writeE2EConfig(t, configPath, server.URL, cert)
+
+	output := runBinaryExpectingExitCode(t, 0, binaryPath, "--quiet", "-c", configPath)
+
+	if strings.TrimSpace(output) != "" {
+		t.Fatalf("expected a successful quiet run to print nothing, got:\n%s", output)
+	}
+
+	// it really did run, it was just quiet about it
+	assertFileContents(t, cert.certPath, "cert-body-example.com")
+	assertActionCount(t, marker, 1)
+}
+
+func TestCLI_QuietRunReportsFailures(t *testing.T) {
+	server := startCertServer(t, "broken.example.com")
+
+	tmpDir := t.TempDir()
+	binaryPath := buildBinary(t)
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	writeE2EConfig(t, configPath, server.URL, newE2ECert(tmpDir, "broken.example.com"))
+
+	output := runBinaryExpectingExitCode(t, 2, binaryPath, "--quiet", "-c", configPath)
+
+	// the summary must survive --quiet when the run failed
+	summary := findOutputLine(t, output, "run summary")
+	if !strings.Contains(summary, "level=ERROR") {
+		t.Fatalf("expected the summary at ERROR under --quiet, got: %s", summary)
+	}
+
+	for _, want := range []string{"failed=1", "total=1"} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("expected %q in the quiet summary, got: %s", want, summary)
+		}
+	}
+
+	failure := findOutputLine(t, output, "msg=\"certificate failed\"")
+	if !strings.Contains(failure, "name=broken.example.com") {
+		t.Fatalf("expected the failing certificate to be named, got: %s", failure)
+	}
+}
+
+func TestCLI_DryRunSummaryIsMarked(t *testing.T) {
+	server := startCertServer(t)
+
+	tmpDir := t.TempDir()
+	binaryPath := buildBinary(t)
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	writeE2EConfig(t, configPath, server.URL, newE2ECert(tmpDir, "example.com"))
+
+	output := runBinaryExpectingExitCode(t, 0, binaryPath, "--dry-run", "-c", configPath)
+
+	summary := findOutputLine(t, output, "run summary")
+	if !strings.Contains(summary, "DRY-RUN: run summary") {
+		t.Fatalf("expected the dry-run summary to be marked, got: %s", summary)
+	}
+
+	if !strings.Contains(summary, "new=1") || !strings.Contains(summary, "total=1") {
+		t.Fatalf("expected a dry run to still report what it would do, got: %s", summary)
+	}
+}
+
+// TestCLI_SummaryReportsSkippedActions ties #46 to the summary: a run with
+// actions off must say so rather than look like a run with nothing to do.
+func TestCLI_SummaryReportsSkippedActions(t *testing.T) {
+	server := startCertServer(t)
+
+	tmpDir := t.TempDir()
+	binaryPath := buildBinary(t)
+	actionScript := filepath.Join(tmpDir, "post-deploy.sh")
+	writeExecutableFile(t, actionScript, "#!/bin/sh\nexit 0\n")
+
+	cert := newE2ECert(tmpDir, "example.com")
+	cert.action = actionScript
+
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	writeE2EConfig(t, configPath, server.URL, cert)
+
+	output := runBinaryExpectingExitCode(t, 0, binaryPath, "--no-actions", "-c", configPath)
+
+	summary := findOutputLine(t, output, "run summary")
+	if !strings.Contains(summary, "action_skipped=1") || !strings.Contains(summary, "action_failed=0") {
+		t.Fatalf("expected the skipped action to be counted, got: %s", summary)
+	}
+}
+
+// findOutputLine returns the first line of binary output containing substr.
+func findOutputLine(t *testing.T, output string, substr string) string {
+	t.Helper()
+
+	for _, line := range strings.Split(output, "\n") {
+		if strings.Contains(line, substr) {
+			return line
+		}
+	}
+
+	t.Fatalf("no output line containing %q found in:\n%s", substr, output)
+	return ""
+}
