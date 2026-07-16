@@ -109,6 +109,20 @@ certificates:
 
 # Optional block that tunes how requests to the CertWarden server are made
 # http:
+#   # Bounds a single attempt. Go duration string.
+#   # default is 10s
+#   timeout: 10s
+#
+#   # Attempts made after the first one. 0 disables retrying.
+#   # Retries cover connection errors, timeouts, 429 and 5xx.
+#   # 401, 403 and 404 are never retried.
+#   # default is 2
+#   retries: 2
+#
+#   # Base for the exponential backoff between attempts.
+#   # default is 1s
+#   retry_backoff: 2s
+#
 #   # Extra headers sent with every request, for deployments behind an
 #   # authenticating proxy (Cloudflare Access, Authelia, oauth2-proxy, ...).
 #   # Values support the same ${ENV} and file: references as the secrets.

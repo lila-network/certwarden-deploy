@@ -57,11 +57,27 @@ type ActionsConfig struct {
 
 // HTTPConfig holds the optional http block, which tunes how requests to
 // CertWarden are made rather than what is requested.
+//
+// Every field is optional and the zero value reproduces the behaviour this tool
+// had before the block existed, bar the retries, which default to 2.
 type HTTPConfig struct {
 	// Headers are sent with every request. Values support the same ${VAR} and
 	// file: references as the secrets, because a header that a reverse proxy
 	// gates on is usually a secret itself.
 	Headers map[string]string `yaml:"headers"`
+
+	// Timeout is a Go duration string bounding a single attempt, e.g. "10s"
+	Timeout string `yaml:"timeout"`
+
+	// Retries is the number of attempts made after the first one, 0 disables
+	// retrying entirely.
+	//
+	// A pointer so that an explicit "retries: 0" can be told apart from the key
+	// being absent, which is what makes a non-zero default possible at all.
+	Retries *int `yaml:"retries"`
+
+	// RetryBackoff is the base for the exponential backoff between attempts
+	RetryBackoff string `yaml:"retry_backoff"`
 }
 
 // Struct that holds the details of a single managed certificate

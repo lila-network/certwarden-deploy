@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Top-level `default_cert_secret` and `default_key_secret` apply to every certificate that does not set its own (#48)
 - `--base-url` and `--api-key` override the config file for a single run (#35)
 - Custom HTTP headers via the `http.headers` config block, for deployments behind an authenticating proxy (#36)
+- Configurable HTTP `timeout`, `retries` and `retry_backoff`, with retries on connection errors, timeouts, 429 and 5xx (#37)
 
 ### Changed
 

@@ -10,6 +10,7 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"math/rand/v2"
 	"mime"
 	"net/http"
 	"net/url"
@@ -17,6 +18,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -524,25 +526,14 @@ func (c *GenericCertificate) writeTempFile(logger *slog.Logger) error {
 }
 
 // fetchFromServer fetches the cert/key data from the CertWarden server and
-// fills the serverBytes field.
+// fills the serverBytes field, retrying attempts that could plausibly succeed
+// on a second try.
 //
 // Returns error or nil on success.
 func (c *GenericCertificate) fetchFromServer(logger *slog.Logger, baseUrl string, skipInsecure bool) error {
-	var apiPath string
-
-	switch c.Type {
-	case CertificateFile:
-		apiPath = constants.CertificateApiPath
-	case KeyFile:
-		apiPath = constants.KeyApiPath
-	case CaCertificateFile:
-		apiPath = constants.CaCertificateApiPath
-	case PrivateCertFile:
-		apiPath = constants.PrivateCertApiPath
-	case PrivateCertChainFile:
-		apiPath = constants.PrivateCertChainApiPath
-	default:
-		return fmt.Errorf("unsupported file type: %v", c.Type)
+	apiPath, err := apiPathForType(c.Type)
+	if err != nil {
+		return err
 	}
 
 	requestURL := baseUrl + apiPath + c.Name
@@ -578,20 +569,124 @@ func (c *GenericCertificate) fetchFromServer(logger *slog.Logger, baseUrl string
 		logger.Debug("Upstream Server HTTP TLS Certificate Validation is enabled")
 	}
 
+	// a zero Timeout means "no timeout" to http.Client, which is the one thing
+	// this must never be, so the old hard-coded value stands in for unset
+	timeout := c.HTTP.Timeout
+	if timeout <= 0 {
+		timeout = configuration.DefaultHTTPTimeout
+	}
+
 	client := &http.Client{
-		Timeout:   10 * time.Second,
+		Timeout:   timeout,
 		Transport: transport,
 	}
-	req, err := http.NewRequest("GET", requestURL, nil)
+
+	attempts := max(c.HTTP.Retries+1, 1)
+
+	for attempt := 1; ; attempt++ {
+		outcome := c.attemptFetch(logger, client, requestURL)
+		if outcome.err == nil {
+			return nil
+		}
+
+		if !outcome.retryable || attempt >= attempts {
+			// only the attempt that is actually given up on is reported as an
+			// error, so a transient blip that the next try fixes does not show
+			// up in the journal as a failure
+			outcome.logFailure(logger)
+
+			if attempt > 1 {
+				logger.Warn(
+					"Giving up on request to server after retrying",
+					"name", c.Name, "file-type", c.Type, "attempts", attempt, "error", outcome.err,
+				)
+			}
+
+			return outcome.err
+		}
+
+		delay := outcome.retryAfter
+		if delay <= 0 {
+			delay = backoffDelay(c.HTTP.RetryBackoff, attempt)
+		}
+
+		logger.Debug(
+			"Retrying request to server",
+			"name", c.Name, "file-type", c.Type,
+			"attempt", attempt, "attempts", attempts,
+			"delay", delay, "error", outcome.err,
+		)
+
+		time.Sleep(delay)
+	}
+}
+
+// apiPathForType maps an artefact type onto its download endpoint.
+func apiPathForType(fileType FileType) (string, error) {
+	switch fileType {
+	case CertificateFile:
+		return constants.CertificateApiPath, nil
+	case KeyFile:
+		return constants.KeyApiPath, nil
+	case CaCertificateFile:
+		return constants.CaCertificateApiPath, nil
+	case PrivateCertFile:
+		return constants.PrivateCertApiPath, nil
+	case PrivateCertChainFile:
+		return constants.PrivateCertChainApiPath, nil
+	default:
+		return "", fmt.Errorf("unsupported file type: %v", fileType)
+	}
+}
+
+// fetchOutcome is the result of a single HTTP attempt.
+//
+// The log record for a failure is built here but emitted by the caller: whether
+// a failure is worth an error record depends on whether it is retried, and only
+// the caller knows that.
+type fetchOutcome struct {
+	// err is nil when the attempt succeeded
+	err error
+
+	// retryable reports whether another attempt could plausibly succeed
+	retryable bool
+
+	// retryAfter is the delay the server asked for, zero if it did not
+	retryAfter time.Duration
+
+	// logMessage is empty when the failure warrants no record of its own, which
+	// is the case for transport errors: the returned error carries them and the
+	// caller logs that.
+	logMessage string
+	logArgs    []any
+}
+
+// logFailure emits the record for an attempt the caller gave up on.
+func (o fetchOutcome) logFailure(logger *slog.Logger) {
+	if o.logMessage == "" {
+		return
+	}
+
+	logger.Error(o.logMessage, o.logArgs...)
+}
+
+// attemptFetch makes one request and, on success, fills serverBytes.
+func (c *GenericCertificate) attemptFetch(logger *slog.Logger, client *http.Client, url string) fetchOutcome {
+	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		return fmt.Errorf("failed to prepare to request data from server: %w", err)
+		return fetchOutcome{err: fmt.Errorf("failed to prepare to request data from server: %w", err)}
 	}
 
 	c.applyHeaders(logger, req)
 
 	res, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("failed to request data from server: %w", err)
+		// connection errors and timeouts both land here and are the classic
+		// transient failures worth another try
+		return fetchOutcome{
+			err:       fmt.Errorf("failed to request data from server: %w", err),
+			retryable: true,
+		}
 	}
 
 	defer func(l *slog.Logger) {
@@ -602,33 +697,128 @@ func (c *GenericCertificate) fetchFromServer(logger *slog.Logger, baseUrl string
 
 	if res.StatusCode == http.StatusUnauthorized {
 		body := errorBodyForLog(res)
-		logger.Error(
-			"API-Key for request is invalid, skipping certificate!",
-			appendBodyArg([]any{"name", c.Name, "file-type", c.Type}, body)...,
-		)
-		if body == "" {
-			return errors.New("API-Key invalid")
+		outcome := fetchOutcome{
+			logMessage: "API-Key for request is invalid, skipping certificate!",
+			logArgs:    appendBodyArg([]any{"name", c.Name, "file-type", c.Type}, body),
 		}
-		return fmt.Errorf("API-Key invalid: %v", body)
-	} else if res.StatusCode != http.StatusOK {
+
+		if body == "" {
+			outcome.err = errors.New("API-Key invalid")
+		} else {
+			outcome.err = fmt.Errorf("API-Key invalid: %v", body)
+		}
+
+		return outcome
+	}
+
+	if res.StatusCode != http.StatusOK {
 		body := errorBodyForLog(res)
-		logger.Error(
-			"failed to get data from server",
-			appendBodyArg([]any{"name", c.Name, "http-response", res.Status, "file-type", c.Type}, body)...,
-		)
-		if body == "" {
-			return fmt.Errorf("got non-success error code from server: %v", res.Status)
+		outcome := fetchOutcome{
+			retryable:  retryableStatus(res.StatusCode),
+			retryAfter: retryAfterDelay(res),
+			logMessage: "failed to get data from server",
+			logArgs:    appendBodyArg([]any{"name", c.Name, "http-response", res.Status, "file-type", c.Type}, body),
 		}
-		return fmt.Errorf("got non-success error code from server: %v: %v", res.Status, body)
+
+		if body == "" {
+			outcome.err = fmt.Errorf("got non-success error code from server: %v", res.Status)
+		} else {
+			outcome.err = fmt.Errorf("got non-success error code from server: %v: %v", res.Status, body)
+		}
+
+		return outcome
 	}
 
 	bodyBytes, err := io.ReadAll(res.Body)
 	if err != nil {
-		return fmt.Errorf("failed to read response from server: %w", err)
+		return fetchOutcome{
+			err:       fmt.Errorf("failed to read response from server: %w", err),
+			retryable: true,
+		}
 	}
 
+	// This body is the certificate or key material itself. It goes straight into
+	// the struct and is never logged, at any level. See
+	// TestFetchFromServerNeverLogsSuccessBody.
 	c.serverBytes = bodyBytes
-	return nil
+	return fetchOutcome{}
+}
+
+// retryableStatus reports whether a status code is worth another attempt.
+//
+// 401, 403 and 404 are deliberately excluded. A rejected key or an unknown
+// certificate will not fix itself within a few seconds, so retrying only delays
+// the inevitable error and risks tripping rate limiting on the server, which
+// would then also punish the certificates that are still fine.
+func retryableStatus(code int) bool {
+	return code == http.StatusTooManyRequests || code >= http.StatusInternalServerError
+}
+
+// maxRetryDelay caps a single wait between attempts.
+//
+// Without it a generous retry_backoff, or a Retry-After of several hours from a
+// broken upstream, could stall a run far past the unit's TimeoutStartSec and
+// take the whole deployment down with it.
+const maxRetryDelay = 30 * time.Second
+
+// retryAfterDelay reads the delay the server asked for.
+//
+// Only honoured on 429 and 503, the two statuses RFC 9110 defines it for. The
+// value is clamped to maxRetryDelay: the server gets to say "later", not "in
+// three hours".
+func retryAfterDelay(res *http.Response) time.Duration {
+	if res.StatusCode != http.StatusTooManyRequests && res.StatusCode != http.StatusServiceUnavailable {
+		return 0
+	}
+
+	value := strings.TrimSpace(res.Header.Get("Retry-After"))
+	if value == "" {
+		return 0
+	}
+
+	if seconds, err := strconv.Atoi(value); err == nil {
+		if seconds <= 0 {
+			return 0
+		}
+
+		return min(time.Duration(seconds)*time.Second, maxRetryDelay)
+	}
+
+	if date, err := http.ParseTime(value); err == nil {
+		delay := time.Until(date)
+		if delay <= 0 {
+			return 0
+		}
+
+		return min(delay, maxRetryDelay)
+	}
+
+	return 0
+}
+
+// backoffDelay returns how long to wait before the attempt after this one.
+//
+// The base doubles per attempt, and the result is jittered over the lower half
+// of the window so that a fleet of hosts sharing one timer does not line up and
+// retry in lockstep, turning a blip into a thundering herd.
+func backoffDelay(base time.Duration, attempt int) time.Duration {
+	if base <= 0 {
+		return 0
+	}
+
+	delay := base
+	for i := 1; i < attempt && delay < maxRetryDelay; i++ {
+		delay *= 2
+	}
+
+	delay = min(delay, maxRetryDelay)
+
+	jitter := delay / 2
+	if jitter <= 0 {
+		return delay
+	}
+
+	return delay - time.Duration(rand.Int64N(int64(jitter)))
 }
 
 // applyHeaders sets the headers for a request to the CertWarden server.

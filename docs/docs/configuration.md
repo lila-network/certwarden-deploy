@@ -327,6 +327,9 @@ The optional top-level `http` block tunes how requests to CertWarden are made, r
 
 ```yaml
 http:
+  timeout: 10s        # Go duration string, bounds a single attempt
+  retries: 2          # attempts after the first, 0 disables
+  retry_backoff: 2s   # base for the exponential backoff
   headers:
     CF-Access-Client-Id: "${CF_ACCESS_CLIENT_ID}"
     CF-Access-Client-Secret: "${CF_ACCESS_CLIENT_SECRET}"
@@ -348,6 +351,53 @@ Two headers are owned by the tool and cannot be overridden from this block:
 Configured headers are applied first and these two are set afterwards, so a typo in the block cannot clobber the API key and turn every request into a `401`.
 
 Header **values** are never logged. Debug output lists header names only.
+
+### http.timeout
+
+Optional. Default: `10s`. A [Go duration string](https://pkg.go.dev/time#ParseDuration) bounding a single attempt.
+
+The default is the value that used to be hard-coded, so leaving it out keeps the behaviour unchanged.
+
+### http.retries
+
+Optional. Default: `2`. The number of attempts made *after* the first one. `0` disables retrying.
+
+Before this existed, a single transient `502` from a reverse proxy lost the certificate until the next timer tick, which on a weekly timer means days.
+
+Retried:
+
+- connection errors and timeouts
+- `429 Too Many Requests`
+- any `5xx`
+
+Not retried:
+
+- `401 Unauthorized`, `403 Forbidden`, `404 Not Found`
+
+A rejected key or an unknown certificate will not come right within a few seconds, so retrying those would only delay the error while risking rate limiting on the server, which would then also punish the certificates that are still fine.
+
+A `Retry-After` header on `429` or `503` is honoured, clamped to 30s so a broken upstream cannot stall the run for hours.
+
+### http.retry_backoff
+
+Optional. Default: `1s`. The base for the exponential backoff between attempts.
+
+The wait doubles per attempt and is jittered, so a fleet of hosts sharing one timer does not retry in lockstep. Individual waits are capped at 30s.
+
+Retries are logged at debug level. Giving up after the last attempt is logged at warning level.
+
+### Retries and systemd
+
+Retrying makes a run take longer in the worst case, so the example unit sets `TimeoutStartSec=` to bound it:
+
+```ini
+[Service]
+Type=oneshot
+TimeoutStartSec=300
+ExecStart=/usr/local/bin/certwarden-deploy
+```
+
+Size it against your own `http.timeout` and `http.retries` if you raise either.
 
 ## Placeholders
 
@@ -544,5 +594,9 @@ Current startup validation checks these conditions before deployment begins:
 - `run_on`, if set, must be one of `new`, `changed`, `new_or_changed`, `all`
 - `key_secret` must be set when `privatecert_path` or `privatecertchain_path` is set
 - `privatecert_format` and `privatecertchain_format` must be `pem`, `pkcs12`, or `jks` when set
+
+- `base_url` must be an absolute URL including the scheme
+- `http.timeout` and `http.retry_backoff` must be valid duration strings, and `http.retries` must not be negative
+- every `${VAR}` and `file:` reference must resolve
 
 If validation fails, the process exits before contacting CertWarden.

@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lila-network/certwarden-deploy/internal/configuration"
 	"github.com/lila-network/certwarden-deploy/internal/constants"
@@ -2225,5 +2226,358 @@ func TestFetchFromServerNeverLogsHeaderValues(t *testing.T) {
 	// the name is logged, so a missing header is still diagnosable
 	if !strings.Contains(logs.String(), "CF-Access-Client-Secret") {
 		t.Fatalf("expected the header name to be logged at debug, got %q", logs.String())
+	}
+}
+
+// retryingSettings returns settings with a backoff short enough for a test.
+func retryingSettings(retries int) configuration.HTTPSettings {
+	return configuration.HTTPSettings{
+		Timeout:      2 * time.Second,
+		Retries:      retries,
+		RetryBackoff: time.Millisecond,
+	}
+}
+
+// TestFetchFromServerRetriesTransientFailures covers the failure #37 exists for:
+// a transient 502 used to lose the certificate until the next timer tick, which
+// can be days away.
+func TestFetchFromServerRetriesTransientFailures(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+	}{
+		{name: "internal server error", status: http.StatusInternalServerError},
+		{name: "bad gateway", status: http.StatusBadGateway},
+		{name: "service unavailable", status: http.StatusServiceUnavailable},
+		{name: "too many requests", status: http.StatusTooManyRequests},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var requests int
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests++
+				if requests == 1 {
+					w.WriteHeader(tc.status)
+					return
+				}
+				_, _ = w.Write([]byte("server-bytes"))
+			}))
+			defer server.Close()
+
+			cert := GenericCertificate{Name: "example.com", Type: CertificateFile, HTTP: retryingSettings(2)}
+
+			if err := cert.fetchFromServer(testLogger(), server.URL, false); err != nil {
+				t.Fatalf("expected the retry to succeed, got: %v", err)
+			}
+
+			if requests != 2 {
+				t.Fatalf("unexpected request count: got %d want 2", requests)
+			}
+
+			if string(cert.serverBytes) != "server-bytes" {
+				t.Fatalf("unexpected body after retry: got %q", string(cert.serverBytes))
+			}
+		})
+	}
+}
+
+// TestFetchFromServerRetriesTimeouts pins that a per-attempt timeout is retried
+// rather than being fatal for the certificate.
+func TestFetchFromServerRetriesTimeouts(t *testing.T) {
+	var requests int
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if requests == 1 {
+			// outlast the client timeout below, then let the client walk away
+			time.Sleep(300 * time.Millisecond)
+			return
+		}
+		_, _ = w.Write([]byte("server-bytes"))
+	}))
+	defer server.Close()
+
+	cert := GenericCertificate{
+		Name: "example.com",
+		Type: CertificateFile,
+		HTTP: configuration.HTTPSettings{
+			Timeout:      50 * time.Millisecond,
+			Retries:      2,
+			RetryBackoff: time.Millisecond,
+		},
+	}
+
+	if err := cert.fetchFromServer(testLogger(), server.URL, false); err != nil {
+		t.Fatalf("expected the retry after the timeout to succeed, got: %v", err)
+	}
+
+	if string(cert.serverBytes) != "server-bytes" {
+		t.Fatalf("unexpected body after retry: got %q", string(cert.serverBytes))
+	}
+}
+
+// TestFetchFromServerRetriesConnectionErrors covers the case where nothing is
+// listening at all, which is what a restarting upstream looks like.
+func TestFetchFromServerRetriesConnectionErrors(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	deadURL := server.URL
+	server.Close()
+
+	cert := GenericCertificate{Name: "example.com", Type: CertificateFile, HTTP: retryingSettings(2)}
+
+	var logs bytes.Buffer
+	err := cert.fetchFromServer(capturingLogger(&logs), deadURL, false)
+	if err == nil {
+		t.Fatal("expected an error when nothing is listening")
+	}
+
+	// two retries after the first attempt means two retry records
+	if got := strings.Count(logs.String(), "Retrying request to server"); got != 2 {
+		t.Fatalf("unexpected retry count: got %d want 2\n%s", got, logs.String())
+	}
+}
+
+// TestFetchFromServerDoesNotRetryClientErrors is the explicit guard for the
+// statuses that must never be retried. A rejected key or an unknown certificate
+// will not come right within a few seconds, so retrying only delays the error
+// and risks tripping rate limiting that would then also hurt the certificates
+// that are still fine.
+func TestFetchFromServerDoesNotRetryClientErrors(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+	}{
+		{name: "unauthorized", status: http.StatusUnauthorized},
+		{name: "forbidden", status: http.StatusForbidden},
+		{name: "not found", status: http.StatusNotFound},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var requests int
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests++
+				w.WriteHeader(tc.status)
+			}))
+			defer server.Close()
+
+			cert := GenericCertificate{Name: "example.com", Type: CertificateFile, HTTP: retryingSettings(5)}
+
+			if err := cert.fetchFromServer(testLogger(), server.URL, false); err == nil {
+				t.Fatalf("expected an error for %d", tc.status)
+			}
+
+			if requests != 1 {
+				t.Fatalf("status %d must not be retried: got %d requests want 1", tc.status, requests)
+			}
+		})
+	}
+}
+
+// TestFetchFromServerHonoursRetryAfter makes sure the server gets to set the
+// pace when it says so, instead of the client's own backoff.
+func TestFetchFromServerHonoursRetryAfter(t *testing.T) {
+	var requests int
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if requests == 1 {
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		_, _ = w.Write([]byte("server-bytes"))
+	}))
+	defer server.Close()
+
+	cert := GenericCertificate{
+		Name: "example.com",
+		Type: CertificateFile,
+		HTTP: configuration.HTTPSettings{
+			Timeout: 2 * time.Second,
+			Retries: 1,
+			// far shorter than the Retry-After, so a pass can only mean the
+			// header won over the backoff
+			RetryBackoff: time.Millisecond,
+		},
+	}
+
+	start := time.Now()
+	if err := cert.fetchFromServer(testLogger(), server.URL, false); err != nil {
+		t.Fatalf("expected the retry to succeed, got: %v", err)
+	}
+
+	if elapsed := time.Since(start); elapsed < time.Second {
+		t.Fatalf("expected Retry-After to delay the retry by ~1s, waited %v", elapsed)
+	}
+}
+
+func TestRetryAfterDelayIsIgnoredForOtherStatuses(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		header string
+		want   time.Duration
+	}{
+		{name: "429 seconds", status: http.StatusTooManyRequests, header: "5", want: 5 * time.Second},
+		{name: "503 seconds", status: http.StatusServiceUnavailable, header: "2", want: 2 * time.Second},
+		{name: "clamped to the cap", status: http.StatusTooManyRequests, header: "86400", want: maxRetryDelay},
+		{name: "ignored on 500", status: http.StatusInternalServerError, header: "5", want: 0},
+		{name: "unparseable is ignored", status: http.StatusTooManyRequests, header: "soon", want: 0},
+		{name: "absent header", status: http.StatusTooManyRequests, header: "", want: 0},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			res := &http.Response{StatusCode: tc.status, Header: http.Header{}}
+			if tc.header != "" {
+				res.Header.Set("Retry-After", tc.header)
+			}
+
+			if got := retryAfterDelay(res); got != tc.want {
+				t.Fatalf("unexpected delay: got %v want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestFetchFromServerRetriesAreVisibleInLogs pins the reporting contract: each
+// retry is a Debug record, and only giving up is loud.
+func TestFetchFromServerRetriesAreVisibleInLogs(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte("upstream is having a moment"))
+	}))
+	defer server.Close()
+
+	cert := GenericCertificate{Name: "example.com", Type: CertificateFile, HTTP: retryingSettings(2)}
+
+	var logs bytes.Buffer
+	if err := cert.fetchFromServer(capturingLogger(&logs), server.URL, false); err == nil {
+		t.Fatal("expected an error once the retries are used up")
+	}
+
+	retryLine := findLogLine(t, logs.String(), "Retrying request to server")
+	if !strings.Contains(retryLine, "level=DEBUG") {
+		t.Fatalf("expected retries to be logged at DEBUG, got: %s", retryLine)
+	}
+
+	if !strings.Contains(retryLine, "attempt=1") || !strings.Contains(retryLine, "attempts=3") {
+		t.Fatalf("expected the attempt counters in the retry record, got: %s", retryLine)
+	}
+
+	giveUpLine := findLogLine(t, logs.String(), "Giving up on request to server")
+	if !strings.Contains(giveUpLine, "level=WARN") {
+		t.Fatalf("expected the final failure to be logged at WARN, got: %s", giveUpLine)
+	}
+
+	if !strings.Contains(giveUpLine, "attempts=3") {
+		t.Fatalf("expected the attempt count when giving up, got: %s", giveUpLine)
+	}
+}
+
+// TestFetchFromServerDoesNotWarnWithoutRetries makes sure a run with retrying
+// switched off reports exactly what it used to.
+func TestFetchFromServerDoesNotWarnWithoutRetries(t *testing.T) {
+	var requests int
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	cert := GenericCertificate{Name: "example.com", Type: CertificateFile, HTTP: retryingSettings(0)}
+
+	var logs bytes.Buffer
+	if err := cert.fetchFromServer(capturingLogger(&logs), server.URL, false); err == nil {
+		t.Fatal("expected an error for a 500")
+	}
+
+	if requests != 1 {
+		t.Fatalf("retries: 0 must make exactly one request, got %d", requests)
+	}
+
+	if strings.Contains(logs.String(), "level=WARN") {
+		t.Fatalf("expected no give-up warning when retrying is disabled, got:\n%s", logs.String())
+	}
+}
+
+// TestFetchFromServerUsesConfiguredTimeout makes sure http.timeout actually
+// bounds the attempt, rather than the old hard-coded 10s doing it.
+func TestFetchFromServerUsesConfiguredTimeout(t *testing.T) {
+	release := make(chan struct{})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-release
+	}))
+	defer server.Close()
+	defer close(release)
+
+	cert := GenericCertificate{
+		Name: "example.com",
+		Type: CertificateFile,
+		HTTP: configuration.HTTPSettings{Timeout: 80 * time.Millisecond},
+	}
+
+	start := time.Now()
+	err := cert.fetchFromServer(testLogger(), server.URL, false)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected the request to time out")
+	}
+
+	// the old hard-coded timeout was 10s, so anything near it means the config
+	// value was ignored
+	if elapsed > 2*time.Second {
+		t.Fatalf("expected the configured timeout to apply, waited %v", elapsed)
+	}
+}
+
+// TestFetchFromServerDefaultsTimeoutWhenUnset guards the one value that must not
+// be taken literally: a zero Timeout means "no timeout at all" to http.Client,
+// which would let a run hang forever.
+func TestFetchFromServerDefaultsTimeoutWhenUnset(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("server-bytes"))
+	}))
+	defer server.Close()
+
+	cert := GenericCertificate{Name: "example.com", Type: CertificateFile}
+
+	if err := cert.fetchFromServer(testLogger(), server.URL, false); err != nil {
+		t.Fatalf("fetchFromServer returned error: %v", err)
+	}
+}
+
+func TestBackoffDelayGrowsAndStaysInItsWindow(t *testing.T) {
+	const base = 100 * time.Millisecond
+
+	for attempt := 1; attempt <= 4; attempt++ {
+		want := base << (attempt - 1)
+
+		// jitter covers the lower half of the window, so the delay always lands
+		// in [want/2, want]
+		for i := 0; i < 50; i++ {
+			got := backoffDelay(base, attempt)
+			if got > want || got < want/2 {
+				t.Fatalf("attempt %d: delay %v outside [%v, %v]", attempt, got, want/2, want)
+			}
+		}
+	}
+}
+
+func TestBackoffDelayIsCappedAndHandlesZeroBase(t *testing.T) {
+	if got := backoffDelay(0, 3); got != 0 {
+		t.Fatalf("a zero base must not produce a wait, got %v", got)
+	}
+
+	if got := backoffDelay(time.Hour, 5); got > maxRetryDelay {
+		t.Fatalf("expected the backoff to be capped at %v, got %v", maxRetryDelay, got)
 	}
 }
