@@ -20,7 +20,15 @@ import (
 	"github.com/lila-network/certwarden-deploy/internal/constants"
 )
 
-func HandleCertificates(logger *slog.Logger, config *configuration.ConfigFileData) {
+// HandleCertificates rolls out every configured certificate and reports what
+// happened in a RunResult, which the caller turns into an exit code.
+//
+// A failing certificate never aborts the run: one broken certificate must not
+// keep the remaining ones from being deployed. Failures are recorded and the
+// loop moves on.
+func HandleCertificates(logger *slog.Logger, config *configuration.ConfigFileData) RunResult {
+	result := RunResult{}
+
 	for _, cert := range config.Certificates {
 		certInfos := GenericCertificate{
 			Name:     cert.Name,
@@ -50,6 +58,7 @@ func HandleCertificates(logger *slog.Logger, config *configuration.ConfigFileDat
 				"Failed to roll out Certificate", "path",
 				certInfos.FilePath, "name", cert.Name, "error", err,
 			)
+			result.Failed = append(result.Failed, CertFailure{Name: cert.Name, Type: certInfos.Type, Err: err})
 			continue
 		}
 
@@ -60,6 +69,7 @@ func HandleCertificates(logger *slog.Logger, config *configuration.ConfigFileDat
 				"Failed to roll out Key", "path",
 				keyInfos.FilePath, "name", cert.Name, "error", err,
 			)
+			result.Failed = append(result.Failed, CertFailure{Name: cert.Name, Type: keyInfos.Type, Err: err})
 			continue
 		}
 
@@ -69,12 +79,26 @@ func HandleCertificates(logger *slog.Logger, config *configuration.ConfigFileDat
 				"failed to roll out CA", "path",
 				caInfos.FilePath, "name", cert.Name, "error", err,
 			)
+			result.Failed = append(result.Failed, CertFailure{Name: cert.Name, Type: caInfos.Type, Err: err})
 			continue
+		}
+
+		// Everything this certificate needed is on disk, so classify it.
+		// New is intentionally never filled here: Rollout cannot tell a first
+		// deployment from an update yet, see RunResult.New and #31.
+		if certOnDiskChanged || keyOnDiskChanged || caOnDiskChanged {
+			result.Changed = append(result.Changed, cert.Name)
+		} else {
+			result.Unchanged = append(result.Unchanged, cert.Name)
 		}
 
 		// if cert OR key changed OR --force
 		if (certOnDiskChanged || keyOnDiskChanged || caOnDiskChanged) || configuration.Force {
 			if configuration.DryRun {
+				// Actions never run during --dry-run, so they can never fail
+				// here and exit code 3 is unreachable in a dry run. A fetch
+				// failure above is different: that request really was made and
+				// really did fail, so it is recorded and still yields exit 2.
 				logger.Info("DRY-RUN: skipping post-rollout action", "name", cert.Name)
 				continue
 			}
@@ -86,9 +110,12 @@ func HandleCertificates(logger *slog.Logger, config *configuration.ConfigFileDat
 			err = handleCertificateAction(cert.Action)
 			if err != nil {
 				logger.Error("Failed to execute post-rollout action", "name", cert.Name, "error", err)
+				result.ActionFailed = append(result.ActionFailed, ActionFailure{Name: cert.Name, Err: err})
 			}
 		}
 	}
+
+	return result
 }
 
 // Rollout handles getting the certificate/key data from the

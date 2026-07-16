@@ -16,6 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Migrated repository to GitHub
 - file write procedure got more resilient
 
+### Fixed
+
+- Certificate rollout failures now exit 2, post-rollout action failures exit 3 (#25)
+
+    This is a behaviour change: a deployment that silently half-failed exited 0 before
+    and exits non-zero now, so a previously green timer may start alerting.
+
 ## [0.2.4] - 2025-07-09
 
 ### Changed
