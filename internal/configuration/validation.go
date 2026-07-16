@@ -27,6 +27,19 @@ func isValidDownloadFormat(format string) bool {
 	return false
 }
 
+// unnamedCertificate stands in for the name of a certificate that has none, so
+// that a message about it still points at something.
+const unnamedCertificate = "unnamed_certificate"
+
+// certificateName returns a name that is safe to put into a validation message.
+func certificateName(name string) string {
+	if name == "" {
+		return unnamedCertificate
+	}
+
+	return name
+}
+
 // IsValid tests if the config read from file has all required parameters set.
 //
 // Exits the app if errors are detected
@@ -39,7 +52,7 @@ func (c *ConfigFileData) IsValid() ConfigValidationError {
 
 	for _, cert := range c.Certificates {
 		if cert.Name == "" {
-			cert.Name = "unnamed_certificate"
+			cert.Name = unnamedCertificate
 			err.Add(`Field 'name' for certificates cannot be blank!`)
 		}
 

@@ -59,7 +59,15 @@ func handleRootCmd(cmd *cobra.Command, args []string) {
 	log := logger.Initialize()
 	config.SubstituteKeys(log)
 
-	validation := config.IsValid()
+	// Secrets are resolved before the config is validated, on purpose: the
+	// blank-secret check has to see the values the fallbacks produced, and an
+	// unresolvable ${VAR} or file: reference must fail the run before the first
+	// request goes out.
+	validation := config.ResolveSecrets(log)
+	if !validation.HasMessages() {
+		validation.Merge(config.IsValid())
+	}
+
 	if validation.HasMessages() {
 		validation.Print(log)
 		slog.Error("The configuration file has errors! Application cannot start unless all errors are corrected!")

@@ -24,7 +24,12 @@ certificates:
   - name: test-certificate.example.com
 
     # Contains the API-Key to fetch the certificate from the server
-    # required
+    # required, unless CERTWARDEN_API_KEY is set in the environment
+    #
+    # Instead of a literal key, this may also reference the value:
+    #   cert_secret: "${CERTWARDEN_APP_CERT_SECRET}"                   # read from the environment
+    #   cert_secret: "file:/run/credentials/certwarden.service/cert"   # read from a file, trimmed
+    # Use $${ if you need a literal value that starts with ${
     cert_secret: examplekey_notvalid_hrzjGDDw8z
 
     # path where to save the certificate
@@ -32,7 +37,8 @@ certificates:
     cert_path: "/path/to/test-certificate.example.com-cert.pem"
 
     # Contains the API-Key to fetch the private key from the server
-    # required
+    # required when key_path is set, unless CERTWARDEN_API_KEY is set
+    # supports the same ${ENV} and file: references as cert_secret
     key_secret: examplekey_notvalid_hrzbbDDw8z
 
     # path where to save the private key

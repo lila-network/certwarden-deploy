@@ -84,6 +84,12 @@ func (e *ConfigValidationError) Add(msg string) {
 	e.ErrorMessages = append(e.ErrorMessages, msg)
 }
 
+// Merge folds the messages of another validation error into this one, so that
+// several validation passes can be reported to the user as a single list.
+func (e *ConfigValidationError) Merge(other ConfigValidationError) {
+	e.ErrorMessages = append(e.ErrorMessages, other.ErrorMessages...)
+}
+
 func (e *ConfigValidationError) HasMessages() bool {
 	return len(e.ErrorMessages) != 0
 }

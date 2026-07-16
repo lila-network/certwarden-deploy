@@ -105,7 +105,9 @@ The current validation accepts letters, numbers, dots, underscores, and hyphens:
 
 `cert_secret`
 
-Required. API key used to download the certificate itself. This same secret is also used for `ca_path`.
+Required, unless a fallback applies. API key used to download the certificate itself. This same secret is also used for `ca_path`.
+
+May be a literal key, a `${VAR}` environment reference, or a `file:/path` reference. See [Secrets](#secrets).
 
 `cert_path`
 
@@ -113,7 +115,9 @@ Required. Destination path for the certificate PEM file.
 
 `key_secret`
 
-Required when `key_path` is set. API key used to download the private key.
+Required when `key_path` is set, unless a fallback applies. API key used to download the private key.
+
+Supports the same `${VAR}` and `file:` references as `cert_secret`.
 
 `key_path`
 
@@ -198,6 +202,59 @@ If the key is present but blank -- an empty string, a whitespace-only string, or
 Optional. Default: `new_or_changed`. Decides when `action` is executed, see [Action Trigger Policies](#action-trigger-policies).
 
 An unknown value is rejected at startup.
+
+## Secrets
+
+`cert_secret` and `key_secret` accept a literal API key, but a literal key means the key lives in the config file. To keep it out of there, a secret value may instead reference where the real value lives.
+
+```yaml
+certificates:
+  - name: "example.com"
+    cert_secret: "${CERTWARDEN_APP_CERT_SECRET}"
+    key_secret: "file:/run/credentials/certwarden.service/app-key"
+```
+
+The following forms are recognised, for `cert_secret`, `key_secret`, and the top-level defaults below:
+
+- `${VAR}`: the value of the environment variable `VAR`
+- `file:/path`: the contents of `/path`, with surrounding whitespace trimmed
+- anything else: the literal value, exactly as before
+
+An unset variable or an unreadable file is a configuration error. The run stops with exit code 1 before any request is made, rather than sending an empty key and reporting a puzzling `401`.
+
+A reference must make up the whole value: `${VAR}-suffix` is rejected instead of being passed through. If you need a literal value that starts with `${`, escape it by doubling the dollar sign:
+
+```yaml
+cert_secret: "$${this-is-not-a-reference}"   # resolves to ${this-is-not-a-reference}
+```
+
+### CERTWARDEN_API_KEY
+
+If a certificate has no `cert_secret` or `key_secret`, the `CERTWARDEN_API_KEY` environment variable is used for it.
+
+### Secrets and logs
+
+Resolved secret values are never written to the log, at any log level, including `--verbose` and `--dry-run`. Debug output reports only *where* a secret came from, never what it is, and a resolution error names the offending variable or path but not its value.
+
+### systemd credentials
+
+`file:` exists mainly for systemd's `LoadCredential=`, which places a secret in a private file below `$CREDENTIALS_DIRECTORY` that only the service user can read:
+
+```ini
+[Service]
+LoadCredential=cert-secret:/etc/certwarden-deploy/cert-secret
+LoadCredential=key-secret:/etc/certwarden-deploy/key-secret
+ExecStart=/usr/local/bin/certwarden-deploy
+```
+
+```yaml
+certificates:
+  - name: "example.com"
+    cert_secret: "file:/run/credentials/certwarden-deploy.service/cert-secret"
+    key_secret: "file:/run/credentials/certwarden-deploy.service/key-secret"
+```
+
+The same shape works for anything that can drop a secret into a file or the environment, such as Vault Agent, SOPS, or a `systemd-creds`-encrypted credential, without templating the whole config file.
 
 ## Placeholders
 

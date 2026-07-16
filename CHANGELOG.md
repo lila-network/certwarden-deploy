@@ -25,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     CertWarden rebuilds `pkcs12`/`jks` containers per request; if it does, every run
     counts as changed and the action runs on every invocation.
 
+- `cert_secret` and `key_secret` can be read from the environment (`${VAR}`) or from a file (`file:/path`), and fall back to `CERTWARDEN_API_KEY` (#34)
+
 ### Changed
 
 - Migrated repository to GitHub
