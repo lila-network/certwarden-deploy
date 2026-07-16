@@ -57,6 +57,13 @@ func handleRootCmd(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 	log := logger.Initialize()
+
+	// Groups are desugared into the flat certificates list first, before
+	// anything else reads the config: every step below then sees the one list
+	// it saw before groups existed, which is what lets {name} in a group path
+	// and a ${VAR} in a group secret work without any of them knowing.
+	validation := config.ExpandGroups(log)
+
 	config.SubstituteKeys(log)
 	config.ApplyOverrides(log)
 
@@ -64,7 +71,7 @@ func handleRootCmd(cmd *cobra.Command, args []string) {
 	// blank-secret check has to see the values the fallbacks produced, and an
 	// unresolvable ${VAR} or file: reference must fail the run before the first
 	// request goes out.
-	validation := config.ResolveSecrets(log)
+	validation.Merge(config.ResolveSecrets(log))
 	if !validation.HasMessages() {
 		validation.Merge(config.IsValid())
 	}

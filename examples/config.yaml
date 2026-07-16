@@ -21,7 +21,42 @@ actions:
 # default_cert_secret: "${CERTWARDEN_CERT_SECRET}"
 # default_key_secret: "${CERTWARDEN_KEY_SECRET}"
 
+# Groups of certificates that are deployed the same way.
+# Everything a group sets is a default for the certificates in it, and {name}
+# resolves to each certificate's own name, so the shared values only have to be
+# written once.
+# optional, and can be combined freely with the flat certificates list below
+# groups:
+#
+#   # the group name is a label used in error messages, nothing else
+#   nginx:
+#
+#     # any certificate key that can sensibly be shared may be set here:
+#     # cert_secret, key_secret, cert_path, key_path, ca_path,
+#     # privatecert_path, privatecert_format, privatecertchain_path,
+#     # privatecertchain_format, action and run_on
+#     # the same ${ENV} and file: references work as below
+#     cert_secret: "${NGINX_CERT_SECRET}"
+#     key_secret: "${NGINX_KEY_SECRET}"
+#     cert_path: "/etc/nginx/ssl/{name}.crt"
+#     key_path: "/etc/nginx/ssl/{name}.key"
+#     action: "systemctl reload nginx"
+#     run_on: "new_or_changed"
+#
+#     # the members of the group, each an ordinary certificate definition
+#     certificates:
+#       - name: a.example.com
+#       - name: b.example.com
+#
+#       # a value set here replaces the group's value wholesale
+#       - name: c.example.com
+#         action: "systemctl reload nginx && /usr/local/bin/notify.sh"
+#
+# names must be unique across all groups and the certificates list below
+
+
 # define all managed certificates here
+# this flat list works with or without the groups above
 certificates:
 
     # name is a unique identifier that must start and end with an alphanumeric character, 

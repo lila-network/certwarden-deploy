@@ -1276,3 +1276,110 @@ certificates:
 
 // TestCLI_ResolvesSecretsFromEnvironmentAndFile is the end-to-end guard for #34
 // and #48: the config carries no literal key at all, only references.
+
+// TestCLI_DeploysEveryCertificateOfAGroup is the end-to-end proof of #38: a
+// group whose paths, secrets and action are written exactly once deploys every
+// one of its members, and the per-certificate override still wins over the
+// group in a real run.
+func TestCLI_DeploysEveryCertificateOfAGroup(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case constants.CertificateApiPath + "a.example.com":
+			_, _ = w.Write([]byte("a-cert-body"))
+		case constants.KeyApiPath + "a.example.com":
+			_, _ = w.Write([]byte("a-key-body"))
+		case constants.CertificateApiPath + "b.example.com":
+			_, _ = w.Write([]byte("b-cert-body"))
+		case constants.KeyApiPath + "b.example.com":
+			_, _ = w.Write([]byte("b-key-body"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	tmpDir := t.TempDir()
+	binaryPath := buildBinary(t)
+
+	groupMarker := filepath.Join(tmpDir, "group-action.log")
+	groupScript := filepath.Join(tmpDir, "group-action.sh")
+	writeExecutableFile(t, groupScript, fmt.Sprintf("#!/bin/sh\nprintf 'run\\n' >> %q\n", groupMarker))
+
+	overrideMarker := filepath.Join(tmpDir, "override-action.log")
+	overrideScript := filepath.Join(tmpDir, "override-action.sh")
+	writeExecutableFile(t, overrideScript, fmt.Sprintf("#!/bin/sh\nprintf 'run\\n' >> %q\n", overrideMarker))
+
+	t.Setenv("E2E_GROUP_CERT_SECRET", "cert-secret")
+	t.Setenv("E2E_GROUP_KEY_SECRET", "key-secret")
+
+	sslDir := filepath.Join(tmpDir, "ssl")
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	// the whole point: the paths, the secrets and the action are written once
+	config := fmt.Sprintf(`base_url: %q
+groups:
+  nginx:
+    cert_secret: "${E2E_GROUP_CERT_SECRET}"
+    key_secret: "${E2E_GROUP_KEY_SECRET}"
+    cert_path: %q
+    key_path: %q
+    action: %q
+    run_on: "new_or_changed"
+    certificates:
+      - name: a.example.com
+      - name: b.example.com
+        action: %q
+`,
+		server.URL,
+		filepath.Join(sslDir, "{name}.crt"),
+		filepath.Join(sslDir, "{name}.key"),
+		groupScript,
+		overrideScript,
+	)
+	writeFile(t, configPath, config)
+
+	runBinary(t, binaryPath, "-c", configPath)
+
+	// {name} in the group paths resolved per certificate
+	assertFileContents(t, filepath.Join(sslDir, "a.example.com.crt"), "a-cert-body")
+	assertFileContents(t, filepath.Join(sslDir, "a.example.com.key"), "a-key-body")
+	assertFileContents(t, filepath.Join(sslDir, "b.example.com.crt"), "b-cert-body")
+	assertFileContents(t, filepath.Join(sslDir, "b.example.com.key"), "b-key-body")
+
+	// the group action fired for the member that inherited it, and only for it
+	assertActionCount(t, groupMarker, 1)
+	assertActionCount(t, overrideMarker, 1)
+
+	// run_on inherited from the group still holds on a second run
+	runBinary(t, binaryPath, "-c", configPath)
+	assertActionCount(t, groupMarker, 1)
+	assertActionCount(t, overrideMarker, 1)
+}
+
+// TestCLI_RejectsDuplicateNameAcrossGroupAndFlatList makes sure the config is
+// rejected before the first request goes out, and that the message says where
+// to look.
+func TestCLI_RejectsDuplicateNameAcrossGroupAndFlatList(t *testing.T) {
+	tmpDir := t.TempDir()
+	binaryPath := buildBinary(t)
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	writeFile(t, configPath, `base_url: "https://certwarden.example.invalid"
+groups:
+  nginx:
+    cert_secret: "secret"
+    cert_path: "/tmp/{name}.crt"
+    certificates:
+      - name: clash.example.com
+certificates:
+  - name: clash.example.com
+    cert_secret: "secret"
+    cert_path: "/tmp/clash.crt"
+`)
+
+	output := runBinaryExpectingExitCode(t, 1, binaryPath, "-c", configPath)
+
+	if !strings.Contains(output, "is not unique") {
+		t.Fatalf("expected the duplicate name to be reported, got %s", output)
+	}
+}

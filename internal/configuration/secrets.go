@@ -197,7 +197,7 @@ func (c *ConfigFileData) resolveCertificateSecrets(err *ConfigValidationError, l
 
 	for index := range c.Certificates {
 		cert := &c.Certificates[index]
-		subject := "for certificate " + certificateName(cert.Name)
+		subject := "for " + cert.certificateSubject()
 
 		// the per-certificate value is resolved even when a default would win
 		// anyway: a reference the user wrote down explicitly has to be reported

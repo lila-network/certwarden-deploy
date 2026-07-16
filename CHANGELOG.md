@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--base-url` and `--api-key` override the config file for a single run (#35)
 - Custom HTTP headers via the `http.headers` config block, for deployments behind an authenticating proxy (#36)
 - Configurable HTTP `timeout`, `retries` and `retry_backoff`, with retries on connection errors, timeouts, 429 and 5xx (#37)
+- Optional `groups` key: certificates that share secrets, paths and an action can be defined once, with `{name}` resolved per certificate. The flat `certificates` list keeps working and both can be used together (#38)
 
 ### Changed
 

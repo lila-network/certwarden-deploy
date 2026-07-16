@@ -125,9 +125,15 @@ Optional. Default `key_secret` for every certificate that does not set its own.
 
 Optional. Tunes how requests are made. See [The http block](#the-http-block).
 
+`groups`
+
+Optional. Groups of certificates that share their secrets, paths and action, so that the shared values only have to be written once. See [Certificate Groups](#certificate-groups).
+
 `certificates`
 
 Optional but normally expected. A list of certificate definitions. An empty list is valid, but nothing will be deployed.
+
+It can be used on its own, together with `groups`, or left out entirely when every certificate lives in a group.
 
 ## Certificate Keys
 
@@ -238,6 +244,93 @@ If the key is present but blank -- an empty string, a whitespace-only string, or
 Optional. Default: `new_or_changed`. Decides when `action` is executed, see [Action Trigger Policies](#action-trigger-policies).
 
 An unknown value is rejected at startup.
+
+## Certificate Groups
+
+Optional. `groups` removes the repetition from a config where many certificates are deployed the same way.
+
+A group holds the values its members share, each member overrides what it needs, and `{name}` resolves per certificate, so the paths do not have to be written out one by one.
+
+### Before
+
+```yaml
+certificates:
+  - name: a.example.com
+    cert_secret: "${NGINX_CERT_SECRET}"
+    key_secret: "${NGINX_KEY_SECRET}"
+    cert_path: "/etc/nginx/ssl/a.example.com.crt"
+    key_path: "/etc/nginx/ssl/a.example.com.key"
+    action: "systemctl reload nginx"
+    run_on: "new_or_changed"
+  - name: b.example.com
+    cert_secret: "${NGINX_CERT_SECRET}"
+    key_secret: "${NGINX_KEY_SECRET}"
+    cert_path: "/etc/nginx/ssl/b.example.com.crt"
+    key_path: "/etc/nginx/ssl/b.example.com.key"
+    action: "systemctl reload nginx"
+    run_on: "new_or_changed"
+  # ... and so on, once per certificate
+```
+
+### After
+
+```yaml
+groups:
+  nginx:
+    cert_secret: "${NGINX_CERT_SECRET}"
+    key_secret: "${NGINX_KEY_SECRET}"
+    cert_path: "/etc/nginx/ssl/{name}.crt"
+    key_path: "/etc/nginx/ssl/{name}.key"
+    action: "systemctl reload nginx"
+    run_on: "new_or_changed"
+    certificates:
+      - name: a.example.com
+      - name: b.example.com
+      - name: c.example.com
+        # this one needs something extra, so it overrides the group's action
+        action: "systemctl reload nginx && /usr/local/bin/notify.sh"
+
+certificates:
+  # the flat list still works and is merged with the groups
+  - name: standalone.example.com
+    cert_secret: "${STANDALONE_CERT_SECRET}"
+    cert_path: "/etc/ssl/standalone.crt"
+```
+
+Both configs deploy the same files and run the same commands.
+
+### Group keys
+
+A group may set any [certificate key](#certificate-keys) that can sensibly be shared:
+
+`cert_secret`, `key_secret`, `cert_path`, `key_path`, `ca_path`, `privatecert_path`, `privatecert_format`, `privatecertchain_path`, `privatecertchain_format`, `action`, `run_on`
+
+`name` is not a group key: it is what tells the members of a group apart.
+
+`groups.<name>.certificates` is the list of members. Each entry is an ordinary certificate definition.
+
+The group name itself (`nginx` above) is only a label. It is used in validation messages to point at the right block of the file and has no other effect: it never reaches the server, the file system, or the run summary.
+
+### Merge rules
+
+- A value set on a certificate replaces the group's value **wholesale**. Nothing is merged, concatenated, or interpolated between the two, including for a list-form `action`.
+- A value the certificate does not set is taken from the group.
+- A value neither sets falls back to whatever it would have fallen back to without groups, e.g. `default_cert_secret` or `CERTWARDEN_API_KEY` for the secrets. A group secret sits between those and the certificate: **certificate → group → `default_cert_secret` → `CERTWARDEN_API_KEY`**.
+- `action: ""` on a certificate is an override, not an omission: it is how a single member opts out of the group's action.
+- Placeholders in a group value are expanded per certificate, so `{name}` in a group path is the member's own name. Every [placeholder](#placeholders) works the same in a group value as in a certificate value.
+- `${VAR}` and `file:` references work in group secrets exactly as they do in certificate secrets.
+
+Groups are sugar and nothing more: they are expanded into the flat `certificates` list before the config is validated, so everything downstream behaves as if the expanded form had been written by hand.
+
+### Uniqueness
+
+Certificate names must be unique across all groups and the flat list. A repeated name is a startup error, since both entries would address the same certificate on the server and, with paths keyed on `{name}`, write to the same files.
+
+This check applies only to configs that use `groups`. A flat list with a repeated name has always been accepted and still is.
+
+### Ordering
+
+Groups are expanded before the flat list, in alphabetical order of the group name, and the members keep the order they are written in. The order only affects the sequence of the deployments and the log.
 
 ## Secrets
 
@@ -592,6 +685,7 @@ Current startup validation checks these conditions before deployment begins:
 - every configured certificate must have a non-empty `cert_path`
 - `name` may only contain letters, numbers, dots, underscores, and hyphens
 - `run_on`, if set, must be one of `new`, `changed`, `new_or_changed`, `all`
+- certificate names must be unique across all groups and the flat `certificates` list, when `groups` is used
 - `key_secret` must be set when `privatecert_path` or `privatecertchain_path` is set
 - `privatecert_format` and `privatecertchain_format` must be `pem`, `pkcs12`, or `jks` when set
 

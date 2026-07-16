@@ -37,13 +37,19 @@ var APIKeyOverride string
 // split cert and key secrets in 0.2.0 on purpose, and a single key cannot
 // express that split.
 type ConfigFileData struct {
-	BaseURL                      string            `yaml:"base_url"`
-	DisableCertificateValidation bool              `yaml:"disable_certificate_validation"`
-	Actions                      ActionsConfig     `yaml:"actions"`
-	DefaultCertificateSecret     string            `yaml:"default_cert_secret"`
-	DefaultKeySecret             string            `yaml:"default_key_secret"`
-	HTTP                         HTTPConfig        `yaml:"http"`
-	Certificates                 []CertificateData `yaml:"certificates"`
+	BaseURL                      string        `yaml:"base_url"`
+	DisableCertificateValidation bool          `yaml:"disable_certificate_validation"`
+	Actions                      ActionsConfig `yaml:"actions"`
+	DefaultCertificateSecret     string        `yaml:"default_cert_secret"`
+	DefaultKeySecret             string        `yaml:"default_key_secret"`
+	HTTP                         HTTPConfig    `yaml:"http"`
+
+	// Groups is optional sugar over Certificates: each group holds the values
+	// its members share, and ExpandGroups folds every member into Certificates
+	// before anything else reads the config. Both keys may be used together.
+	Groups map[string]CertificateGroup `yaml:"groups"`
+
+	Certificates []CertificateData `yaml:"certificates"`
 }
 
 // ActionsConfig holds the run-wide switches for post-rollout actions.
@@ -110,6 +116,15 @@ type CertificateData struct {
 	// RunOn selects when Action is executed. Empty means DefaultRunOn.
 	// Validated by IsValid, read through EffectiveRunOn.
 	RunOn string `yaml:"run_on"`
+
+	// group names the group this certificate was defined in, or "" when it came
+	// from the flat certificates list. It is set by ExpandGroups.
+	//
+	// It is unexported and read by validation messages only. Desugaring is the
+	// point of groups, so a certificate's group is deliberately invisible
+	// everywhere downstream of the config package: it is context for telling
+	// the user where in their file to look, not data the rollout acts on.
+	group string
 }
 
 type ConfigValidationError struct {

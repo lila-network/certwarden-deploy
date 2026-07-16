@@ -41,6 +41,21 @@ func certificateName(name string) string {
 	return name
 }
 
+// certificateSubject names a certificate in a validation message, pointing at
+// the group it was defined in when it came from one.
+//
+// A certificate from the flat certificates list renders exactly as it did
+// before groups existed, so no pre-existing message changed. A grouped one
+// names both, because "certificate b.example.com" is not enough to find the
+// offending line in a file where the value at fault may well be the group's.
+func (c CertificateData) certificateSubject() string {
+	if c.group == "" {
+		return "certificate " + certificateName(c.Name)
+	}
+
+	return "group '" + c.group + "', certificate '" + certificateName(c.Name) + "'"
+}
+
 // isAbsoluteURL reports whether raw is a URL this tool can build a request from.
 //
 // url.Parse alone is not enough: it happily accepts "certwarden.example.com" as
@@ -83,17 +98,24 @@ func (c *ConfigFileData) IsValid() ConfigValidationError {
 	for _, cert := range c.Certificates {
 		if cert.Name == "" {
 			cert.Name = unnamedCertificate
-			err.Add(`Field 'name' for certificates cannot be blank!`)
+
+			// this message names no certificate, there being none to name, so
+			// the group is the only pointer at the offending line there is
+			if cert.group == "" {
+				err.Add(`Field 'name' for certificates cannot be blank!`)
+			} else {
+				err.Add(`Field 'name' for certificates in group '` + cert.group + `' cannot be blank!`)
+			}
 		}
 
 		if cert.CertificateSecret == "" {
-			err.Add(`Field 'cert_secret' for certificate ` + cert.Name +
+			err.Add(`Field 'cert_secret' for ` + cert.certificateSubject() +
 				` is set neither on the certificate nor as 'default_cert_secret', and ` +
 				APIKeyEnvVar + ` is not set either!`)
 		}
 
 		if cert.CertificatePath == "" {
-			err.Add(`Field 'cert_path' for certificate ` + cert.Name + " cannot be blank!")
+			err.Add(`Field 'cert_path' for ` + cert.certificateSubject() + " cannot be blank!")
 		}
 
 		// An omitted or empty action simply means "nothing to run".
@@ -105,7 +127,7 @@ func (c *ConfigFileData) IsValid() ConfigValidationError {
 		// nothing. HandleCertificates warns about it at rollout time instead.
 
 		if !cert.EffectiveRunOn().IsValid() {
-			err.Add(`Field 'run_on' for certificate ` + cert.Name + ` must be one of 'new', 'changed', 'new_or_changed' or 'all', got '` + cert.RunOn + `'!`)
+			err.Add(`Field 'run_on' for ` + cert.certificateSubject() + ` must be one of 'new', 'changed', 'new_or_changed' or 'all', got '` + cert.RunOn + `'!`)
 		}
 
 		// The privatecert and privatecertchain endpoints authenticate with the
@@ -113,27 +135,34 @@ func (c *ConfigFileData) IsValid() ConfigValidationError {
 		// key_secret the combined secret cannot be built at all.
 		if cert.KeySecret == "" {
 			if cert.PrivateCertPath != "" {
-				err.Add(`Field 'key_secret' for certificate ` + cert.Name + " is required when 'privatecert_path' is set!")
+				err.Add(`Field 'key_secret' for ` + cert.certificateSubject() + " is required when 'privatecert_path' is set!")
 			}
 
 			if cert.PrivateCertChainPath != "" {
-				err.Add(`Field 'key_secret' for certificate ` + cert.Name + " is required when 'privatecertchain_path' is set!")
+				err.Add(`Field 'key_secret' for ` + cert.certificateSubject() + " is required when 'privatecertchain_path' is set!")
 			}
 		}
 
 		if !isValidDownloadFormat(cert.PrivateCertFormat) {
-			err.Add(`Field 'privatecert_format' for certificate ` + cert.Name +
+			err.Add(`Field 'privatecert_format' for ` + cert.certificateSubject() +
 				" must be one of " + strings.Join(validDownloadFormats, ", ") + "!")
 		}
 
 		if !isValidDownloadFormat(cert.PrivateCertChainFormat) {
-			err.Add(`Field 'privatecertchain_format' for certificate ` + cert.Name +
+			err.Add(`Field 'privatecertchain_format' for ` + cert.certificateSubject() +
 				" must be one of " + strings.Join(validDownloadFormats, ", ") + "!")
 		}
 
 		re := regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
 		if !re.MatchString(cert.Name) {
-			err.Add(`Field 'name' for certificate may only contain -_. and alphanumeric characters!`)
+			// the flat form of this message has never named the certificate;
+			// it is left that way rather than churning it for every existing
+			// config, while a grouped one gets the full subject
+			if cert.group == "" {
+				err.Add(`Field 'name' for certificate may only contain -_. and alphanumeric characters!`)
+			} else {
+				err.Add(`Field 'name' for ` + cert.certificateSubject() + ` may only contain -_. and alphanumeric characters!`)
+			}
 		}
 	}
 
