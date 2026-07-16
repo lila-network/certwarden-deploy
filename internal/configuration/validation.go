@@ -28,12 +28,13 @@ func (c *ConfigFileData) IsValid() ConfigValidationError {
 			err.Add(`Field 'cert_path' for certificate ` + cert.Name + " cannot be blank!")
 		}
 
-		// An omitted action simply means "nothing to run". An action that is
-		// present but empty is a mistake worth reporting: the user asked for
-		// something to happen and nothing would.
-		if cert.Action.IsSet() && cert.Action.IsEmpty() {
-			err.Add(`Field 'action' for certificate ` + cert.Name + " cannot be blank!")
-		}
+		// An omitted or empty action simply means "nothing to run".
+		//
+		// A present-but-empty action is a likely mistake, but deliberately NOT
+		// a validation error: refusing to start would stop every certificate in
+		// the config from being deployed because one action line is blank, and
+		// a config that deploys nothing is far worse than one that runs
+		// nothing. HandleCertificates warns about it at rollout time instead.
 
 		if !cert.EffectiveRunOn().IsValid() {
 			err.Add(`Field 'run_on' for certificate ` + cert.Name + ` must be one of 'new', 'changed', 'new_or_changed' or 'all', got '` + cert.RunOn + `'!`)

@@ -574,9 +574,12 @@ func TestCLI_RunsShellFormAndListFormActions(t *testing.T) {
 	assertFileContents(t, marker, "shell cert renewed\nchained\ncert renewed\n&&\n")
 }
 
-// TestCLI_RejectsBlankAction pins that an action key that is present but empty
-// is a config error rather than a silent no-op.
-func TestCLI_RejectsBlankAction(t *testing.T) {
+// TestCLI_BlankActionWarnsButStillDeploys pins that an action key that is
+// present but empty is a warning, not a fatal config error. Refusing to start
+// would stop every certificate in the config from deploying because one action
+// line is blank -- a config that deploys nothing is worse than one that runs
+// nothing.
+func TestCLI_BlankActionWarnsButStillDeploys(t *testing.T) {
 	server := startCertServer(t)
 
 	tmpDir := t.TempDir()
@@ -592,10 +595,14 @@ certificates:
     action: "   "
 `, server.URL, cert.name, cert.certPath))
 
-	output := runBinaryExpectingExitCode(t, 1, binaryPath, "-c", configPath)
+	output := runBinaryExpectingExitCode(t, 0, binaryPath, "-c", configPath, "-v")
 
-	if !strings.Contains(output, "Field 'action' for certificate example.com cannot be blank!") {
-		t.Fatalf("expected a blank-action validation error, got:\n%s", output)
+	if !strings.Contains(output, "Action is configured but empty") {
+		t.Fatalf("expected a blank-action warning, got:\n%s", output)
+	}
+
+	if _, err := os.Stat(cert.certPath); err != nil {
+		t.Fatalf("certificate was not deployed despite the blank action: %v", err)
 	}
 }
 

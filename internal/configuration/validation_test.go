@@ -54,7 +54,7 @@ func TestConfigValidationReportsMissingAndInvalidFields(t *testing.T) {
 // TestConfigValidationRejectsBlankAction covers the difference between "no
 // action wanted" and "an action was configured but it is blank": only the
 // latter is a mistake.
-func TestConfigValidationRejectsBlankAction(t *testing.T) {
+func TestConfigValidationAcceptsBlankAction(t *testing.T) {
 	cfg := ConfigFileData{
 		BaseURL: "https://example.invalid",
 		Certificates: []CertificateData{
@@ -75,20 +75,20 @@ func TestConfigValidationRejectsBlankAction(t *testing.T) {
 
 	err := cfg.IsValid()
 
-	for _, want := range []string{
+	for _, unwanted := range []string{
 		`Field 'action' for certificate blank-string.example.com cannot be blank!`,
 		`Field 'action' for certificate empty-list.example.com cannot be blank!`,
 	} {
 		found := false
 		for _, message := range err.ErrorMessages {
-			if message == want {
+			if message == unwanted {
 				found = true
 				break
 			}
 		}
 
-		if !found {
-			t.Fatalf("expected validation message %q, got %v", want, err.ErrorMessages)
+		if found {
+			t.Fatalf("blank action must warn at rollout, not fail validation; got %q", unwanted)
 		}
 	}
 }

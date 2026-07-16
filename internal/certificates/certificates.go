@@ -58,7 +58,15 @@ func HandleCertificates(logger *slog.Logger, config *configuration.ConfigFileDat
 		// both the write and the action.
 		if actionTriggered(cert.EffectiveRunOn(), state) || configuration.Force {
 			if cert.Action.IsEmpty() {
-				// nothing configured to run, so there is nothing to report
+				// An action key that is present but blank is almost certainly a
+				// mistake, so say so -- but only warn. Failing the run would
+				// punish every certificate in the config for one empty line.
+				if cert.Action.IsSet() {
+					logger.Warn(
+						"Action is configured but empty, nothing will run",
+						"name", cert.Name,
+					)
+				}
 				continue
 			}
 
