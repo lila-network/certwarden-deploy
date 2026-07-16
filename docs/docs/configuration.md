@@ -17,6 +17,7 @@ The binary accepts the following flags:
     If none of them exists, the tool exits with an error listing every path it searched. Setting `--config` explicitly disables the search: that file is used as-is and it is an error if it does not exist.
 - `-d, --dry-run`: show what would change without writing files. This also enables debug logging
 - `-f, --force`: write files and run actions even if the content on disk is unchanged
+- `--no-actions`: deploy the files but skip every post-rollout action. Overrides `actions.enabled` in the config file. Unlike `--dry-run`, files are still written
 - `-q, --quiet`: only print errors
 - `-v, --verbose`: enable debug logging
 - `--version`: print the version and exit
@@ -29,6 +30,9 @@ If both `--quiet` and `--verbose` are set, `--quiet` wins.
 base_url: "https://certwarden.example.com"
 disable_certificate_validation: false
 
+actions:
+  enabled: true
+
 certificates:
   - name: "example.com"
     cert_secret: "cw_cert_api_key"
@@ -37,6 +41,7 @@ certificates:
     key_path: "/etc/certs/{name}/privkey.pem"
     ca_path: "/etc/certs/{name}/chain.pem"
     action: "/usr/bin/systemctl reload caddy"
+    run_on: "new_or_changed"
 ```
 
 ## Top-level Keys
@@ -52,6 +57,25 @@ The download endpoints are appended to this value internally, so the safest form
 Optional. Default: `false`.
 
 Set this to `true` only if your CertWarden instance uses a certificate that is not publicly trusted and you explicitly trust that endpoint. Disabling TLS validation weakens transport security.
+
+`actions`
+
+Optional. Run-wide switches for post-rollout actions.
+
+`actions.enabled`
+
+Optional. Default: `true`.
+
+Set to `false` to deploy the certificate files but skip every configured `action`. `--no-actions` does the same on the command line and takes precedence over this key.
+
+Skipping an action is not a failure: the run still exits `0` if everything else worked, and each suppressed command is logged, so it is visible what did not run.
+
+This differs from `--dry-run`, which simulates the whole run and writes nothing at all.
+
+```yaml
+actions:
+  enabled: true
+```
 
 `certificates`
 
@@ -231,7 +255,7 @@ For each configured certificate, the binary:
 3. writes changed files atomically through a temporary file and rename
 4. creates missing parent directories automatically
 5. preserves the existing file mode when replacing a file; newly created files default to mode `0644`
-6. runs the configured `action` if the certificate's outcome matches `run_on`, or if `--force` was used
+6. runs the configured `action` if the certificate's outcome matches `run_on`, or if `--force` was used, unless actions are disabled for the run
 
 ## Validation Notes
 

@@ -7,6 +7,14 @@ base_url: "https://certwarden.example.com"
 # default is false
 disable_certificate_validation: false
 
+# run-wide switches for the post-rollout actions
+actions:
+
+  # set to false to deploy the certificate files but skip every action
+  # the --no-actions flag does the same and overrides this setting
+  # default is true
+  enabled: true
+
 # define all managed certificates here
 certificates:
 

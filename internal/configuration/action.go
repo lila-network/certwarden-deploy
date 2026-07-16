@@ -127,3 +127,26 @@ func (a Action) substitute(replace func(string) string) Action {
 
 	return out
 }
+
+// ActionsEnabled reports whether post-rollout actions may run at all.
+//
+// The default is on, and it must stay on: certwarden-deploy configs exist in
+// the wild whose whole point is the reload they trigger, and defaulting to off
+// would silently turn every one of them into a file copier. Actions are only
+// skipped when the user says so, either with actions.enabled: false or with
+// --no-actions.
+//
+// --no-actions wins over the config file: a flag is the more immediate
+// statement of intent, and it is the escape hatch for a config you do not want
+// to edit.
+func (c *ConfigFileData) ActionsEnabled() bool {
+	if NoActions {
+		return false
+	}
+
+	if c.Actions.Enabled != nil {
+		return *c.Actions.Enabled
+	}
+
+	return true
+}

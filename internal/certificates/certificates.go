@@ -57,6 +57,24 @@ func HandleCertificates(logger *slog.Logger, config *configuration.ConfigFileDat
 		// run_on: new. That is what --force has always meant here: it forces
 		// both the write and the action.
 		if actionTriggered(cert.EffectiveRunOn(), state) || configuration.Force {
+			if cert.Action.IsEmpty() {
+				// nothing configured to run, so there is nothing to report
+				continue
+			}
+
+			if !config.ActionsEnabled() {
+				// Checked before --dry-run: actions being off is a property of
+				// the whole run, and the summary should say so whether or not
+				// the run was a simulation. The command is logged so it is
+				// obvious what did not happen.
+				logger.Info(
+					"Actions are disabled, skipping post-rollout action",
+					"name", cert.Name, "command", cert.Action.String(),
+				)
+				result.ActionSkipped = append(result.ActionSkipped, cert.Name)
+				continue
+			}
+
 			if configuration.DryRun {
 				// Actions never run during --dry-run, so they can never fail
 				// here and exit code 3 is unreachable in a dry run. A fetch

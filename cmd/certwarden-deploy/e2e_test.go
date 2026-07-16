@@ -259,8 +259,23 @@ func startCertServer(t *testing.T, unauthorized ...string) *httptest.Server {
 func writeE2EConfig(t *testing.T, configPath string, baseURL string, certs ...e2eCert) {
 	t.Helper()
 
+	writeE2EConfigWithActions(t, configPath, baseURL, "", certs...)
+}
+
+// writeE2EConfigWithActions renders a config file, optionally with a top-level
+// actions block. An empty actionsBlock omits the key entirely, which is what
+// exercises the default.
+func writeE2EConfigWithActions(t *testing.T, configPath string, baseURL string, actionsBlock string, certs ...e2eCert) {
+	t.Helper()
+
 	var b strings.Builder
-	fmt.Fprintf(&b, "base_url: %q\ndisable_certificate_validation: false\ncertificates:\n", baseURL)
+	fmt.Fprintf(&b, "base_url: %q\ndisable_certificate_validation: false\n", baseURL)
+
+	if actionsBlock != "" {
+		b.WriteString(actionsBlock)
+	}
+
+	b.WriteString("certificates:\n")
 
 	for _, cert := range certs {
 		fmt.Fprintf(&b, `  - name: %q
@@ -674,4 +689,104 @@ func TestCLI_RejectsUnknownRunOn(t *testing.T) {
 	if _, err := os.Stat(cert.certPath); !os.IsNotExist(err) {
 		t.Fatalf("expected validation to stop the run before deploying, got err=%v", err)
 	}
+}
+
+// TestCLI_ActionsToggle drives #46 end to end: files must deploy in every
+// case, only the action is suppressed, and a suppressed action never turns a
+// green run red.
+func TestCLI_ActionsToggle(t *testing.T) {
+	tests := []struct {
+		name         string
+		actionsBlock string
+		args         []string
+		wantAction   bool
+	}{
+		{
+			name:       "default is on",
+			wantAction: true,
+		},
+		{
+			name:         "config on",
+			actionsBlock: "actions:\n  enabled: true\n",
+			wantAction:   true,
+		},
+		{
+			name:         "config off",
+			actionsBlock: "actions:\n  enabled: false\n",
+			wantAction:   false,
+		},
+		{
+			name:       "no-actions flag",
+			args:       []string{"--no-actions"},
+			wantAction: false,
+		},
+		{
+			name:         "flag overrides config on",
+			actionsBlock: "actions:\n  enabled: true\n",
+			args:         []string{"--no-actions"},
+			wantAction:   false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			server := startCertServer(t)
+
+			tmpDir := t.TempDir()
+			binaryPath := buildBinary(t)
+			marker := filepath.Join(tmpDir, "action.log")
+			actionScript := filepath.Join(tmpDir, "post-deploy.sh")
+			writeExecutableFile(t, actionScript, fmt.Sprintf("#!/bin/sh\nprintf 'run\\n' >> %q\n", marker))
+
+			cert := newE2ECert(tmpDir, "example.com")
+			cert.action = actionScript
+
+			configPath := filepath.Join(tmpDir, "config.yaml")
+			writeE2EConfigWithActions(t, configPath, server.URL, tc.actionsBlock, cert)
+
+			args := append([]string{"-c", configPath}, tc.args...)
+			output := runBinaryExpectingExitCode(t, 0, binaryPath, args...)
+
+			// The whole point of #46: deploy the files either way.
+			assertFileContents(t, cert.certPath, "cert-body-example.com")
+			assertFileContents(t, cert.keyPath, "key-body-example.com")
+			assertFileContents(t, cert.caPath, "ca-body-example.com")
+
+			if tc.wantAction {
+				assertActionCount(t, marker, 1)
+				return
+			}
+
+			if _, err := os.Stat(marker); !os.IsNotExist(err) {
+				t.Fatalf("expected the action to be suppressed, got err=%v", err)
+			}
+
+			if !strings.Contains(output, "Actions are disabled") || !strings.Contains(output, actionScript) {
+				t.Fatalf("expected the skipped command to be logged, got:\n%s", output)
+			}
+		})
+	}
+}
+
+// TestCLI_SuppressedActionDoesNotExitThree pins that switching actions off
+// cannot produce an action failure, even for an action that always fails.
+func TestCLI_SuppressedActionDoesNotExitThree(t *testing.T) {
+	server := startCertServer(t)
+
+	tmpDir := t.TempDir()
+	binaryPath := buildBinary(t)
+
+	cert := newE2ECert(tmpDir, "example.com")
+	cert.action = writeFailingAction(t, tmpDir, "example.com")
+
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	writeE2EConfig(t, configPath, server.URL, cert)
+
+	// sanity: this very config exits 3 while actions are on
+	runBinaryExpectingExitCode(t, 3, binaryPath, "-c", configPath)
+
+	// and is green with them off, while still deploying
+	os.Remove(cert.certPath)
+	runBinaryExpectingExitCode(t, 0, binaryPath, "--no-actions", "-c", configPath)
+	assertFileContents(t, cert.certPath, "cert-body-example.com")
 }

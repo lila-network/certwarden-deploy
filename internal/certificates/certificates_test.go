@@ -1437,3 +1437,163 @@ func TestNeedsRolloutIsTriState(t *testing.T) {
 		})
 	}
 }
+
+// TestHandleCertificatesSuppressesActionsWhenDisabled covers #46 at the unit
+// level: files still deploy, the skipped command is logged, and a suppressed
+// action is not a failure.
+func TestHandleCertificatesSuppressesActionsWhenDisabled(t *testing.T) {
+	disabled := false
+	enabled := true
+
+	tests := []struct {
+		name       string
+		configured *bool
+		noActions  bool
+		wantAction bool
+	}{
+		{name: "default is on", configured: nil, noActions: false, wantAction: true},
+		{name: "config off", configured: &disabled, noActions: false, wantAction: false},
+		{name: "config on", configured: &enabled, noActions: false, wantAction: true},
+		{name: "flag off", configured: nil, noActions: true, wantAction: false},
+		{name: "flag overrides config on", configured: &enabled, noActions: true, wantAction: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Cleanup(func() {
+				configuration.NoActions = false
+				configuration.Force = false
+				configuration.DryRun = false
+			})
+			configuration.NoActions = tc.noActions
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte("server-body"))
+			}))
+			defer server.Close()
+
+			tmpDir := t.TempDir()
+			certPath := filepath.Join(tmpDir, "cert.pem")
+			marker := filepath.Join(tmpDir, "action.log")
+			script := writeActionScript(t, "printf 'run\\n' >> "+marker+"\n")
+
+			config := &configuration.ConfigFileData{
+				BaseURL: server.URL,
+				Actions: configuration.ActionsConfig{Enabled: tc.configured},
+				Certificates: []configuration.CertificateData{
+					{
+						Name:              "example.com",
+						CertificateSecret: "secret",
+						CertificatePath:   certPath,
+						Action:            configuration.ShellAction(script),
+					},
+				},
+			}
+
+			var logs bytes.Buffer
+			result := HandleCertificates(capturingLogger(&logs), config)
+
+			// The certificate deploys either way: #46 is about actions only.
+			assertFileContents(t, certPath, "server-body")
+			assertCertificateState(t, result, "example.com", Created)
+			assertActionRuns(t, marker, tc.wantAction)
+
+			if tc.wantAction {
+				if len(result.ActionSkipped) != 0 {
+					t.Fatalf("unexpected skipped actions: %v", result.ActionSkipped)
+				}
+				return
+			}
+
+			if len(result.ActionSkipped) != 1 || result.ActionSkipped[0] != "example.com" {
+				t.Fatalf("unexpected skipped actions: %v", result.ActionSkipped)
+			}
+
+			// A suppressed action is not a failure.
+			if len(result.ActionFailed) != 0 {
+				t.Fatalf("a suppressed action must not be a failure: %v", result.ActionFailed)
+			}
+
+			if result.ExitCode() != ExitSuccess {
+				t.Fatalf("unexpected exit code: got %d want %d", result.ExitCode(), ExitSuccess)
+			}
+
+			line := findLogLine(t, logs.String(), "Actions are disabled")
+			if !strings.Contains(line, "level=INFO") {
+				t.Fatalf("expected the suppressed action to be logged at INFO, got: %s", line)
+			}
+
+			// the command that did not run must be in the log
+			if !strings.Contains(line, script) {
+				t.Fatalf("expected the skipped command in the log record, got: %s", line)
+			}
+		})
+	}
+}
+
+// TestHandleCertificatesSuppressedActionNeverFails pins that an action that
+// would have exited non-zero cannot produce exit code 3 while actions are off.
+func TestHandleCertificatesSuppressedActionNeverFails(t *testing.T) {
+	t.Cleanup(func() {
+		configuration.NoActions = false
+		configuration.Force = false
+	})
+	configuration.NoActions = true
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("server-body"))
+	}))
+	defer server.Close()
+
+	tmpDir := t.TempDir()
+	config := &configuration.ConfigFileData{
+		BaseURL: server.URL,
+		Certificates: []configuration.CertificateData{
+			{
+				Name:              "example.com",
+				CertificateSecret: "secret",
+				CertificatePath:   filepath.Join(tmpDir, "cert.pem"),
+				Action:            configuration.ShellAction("exit 7"),
+			},
+		},
+	}
+
+	result := HandleCertificates(testLogger(), config)
+
+	if len(result.ActionFailed) != 0 {
+		t.Fatalf("a suppressed action must never fail: %v", result.ActionFailed)
+	}
+
+	if result.ExitCode() != ExitSuccess {
+		t.Fatalf("unexpected exit code: got %d want %d", result.ExitCode(), ExitSuccess)
+	}
+}
+
+// TestHandleCertificatesEmptyActionIsNotReportedAsSkipped keeps the skipped
+// count honest: a certificate without an action has nothing to suppress.
+func TestHandleCertificatesEmptyActionIsNotReportedAsSkipped(t *testing.T) {
+	t.Cleanup(func() { configuration.NoActions = false })
+	configuration.NoActions = true
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("server-body"))
+	}))
+	defer server.Close()
+
+	config := &configuration.ConfigFileData{
+		BaseURL: server.URL,
+		Certificates: []configuration.CertificateData{
+			{
+				Name:              "example.com",
+				CertificateSecret: "secret",
+				CertificatePath:   filepath.Join(t.TempDir(), "cert.pem"),
+			},
+		},
+	}
+
+	result := HandleCertificates(testLogger(), config)
+
+	if len(result.ActionSkipped) != 0 {
+		t.Fatalf("expected no skipped actions for a certificate without one: %v", result.ActionSkipped)
+	}
+}

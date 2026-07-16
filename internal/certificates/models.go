@@ -145,6 +145,14 @@ type RunResult struct {
 
 	// ActionFailed holds every post-rollout action that failed
 	ActionFailed []ActionFailure
+
+	// ActionSkipped holds the names of certificates whose action would have
+	// run but was suppressed because actions are disabled for this run.
+	//
+	// A suppressed action is not a failure: it never reaches ExitCode. It is
+	// tracked so a run with actions off can say so instead of just looking
+	// like a run where nothing needed doing.
+	ActionSkipped []string
 }
 
 // ExitCode maps the result of a run onto the process exit code.

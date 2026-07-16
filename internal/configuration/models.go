@@ -20,11 +20,24 @@ var VerboseLogging bool
 // Flag to show that the user wants to force certificate update
 var Force bool
 
+// Flag to show that the user wants to skip every post-rollout action
+var NoActions bool
+
 // Struct to read the config file into when reading from disk
 type ConfigFileData struct {
 	BaseURL                      string            `yaml:"base_url"`
 	DisableCertificateValidation bool              `yaml:"disable_certificate_validation"`
+	Actions                      ActionsConfig     `yaml:"actions"`
 	Certificates                 []CertificateData `yaml:"certificates"`
+}
+
+// ActionsConfig holds the run-wide switches for post-rollout actions.
+type ActionsConfig struct {
+	// Enabled turns post-rollout actions on or off for the whole run.
+	//
+	// It is a pointer so an omitted key can be told apart from an explicit
+	// false. Omitted means enabled: see ConfigFileData.ActionsEnabled.
+	Enabled *bool `yaml:"enabled"`
 }
 
 // Struct that holds the details of a single managed certificate

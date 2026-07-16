@@ -25,5 +25,6 @@ func init() {
 	cli.RootCmd.PersistentFlags().BoolVarP(&configuration.QuietLogging, "quiet", "q", false, "Disable any logging (if both -q and -v are set, quiet wins)")
 	cli.RootCmd.PersistentFlags().StringVarP(&configuration.ConfigFile, "config", "c", "/etc/certwarden-deploy/config.yaml", "Path to config file. If unset, the first existing of ./certwarden-deploy.yaml, $XDG_CONFIG_HOME/certwarden-deploy/config.yaml (or ~/.config/certwarden-deploy/config.yaml) and /etc/certwarden-deploy/config.yaml is used")
 	cli.RootCmd.PersistentFlags().BoolVarP(&configuration.Force, "force", "f", false, "Force overwriting and execution action to occur, regardless if certificate already exists")
+	cli.RootCmd.PersistentFlags().BoolVar(&configuration.NoActions, "no-actions", false, "Deploy files but skip every post-rollout action, overriding actions.enabled in the config file")
 
 }
