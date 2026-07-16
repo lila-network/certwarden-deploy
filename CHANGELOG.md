@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Unit and E2E tests
+- Config file is searched in `./certwarden-deploy.yaml`, `$XDG_CONFIG_HOME/certwarden-deploy/config.yaml` and `/etc/certwarden-deploy/config.yaml` when `--config` is not set
 
 ### Changed
 
