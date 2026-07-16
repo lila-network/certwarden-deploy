@@ -23,6 +23,13 @@ var Force bool
 // Flag to show that the user wants to skip every post-rollout action
 var NoActions bool
 
+// BaseURLOverride holds --base-url, which replaces base_url from the config file
+var BaseURLOverride string
+
+// APIKeyOverride holds --api-key, which replaces cert_secret and key_secret for
+// every certificate. See ResolveSecrets for why it is applied there.
+var APIKeyOverride string
+
 // Struct to read the config file into when reading from disk
 //
 // DefaultCertificateSecret/DefaultKeySecret are deliberately two fields and not

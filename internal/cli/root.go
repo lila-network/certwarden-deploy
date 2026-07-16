@@ -58,6 +58,7 @@ func handleRootCmd(cmd *cobra.Command, args []string) {
 	}
 	log := logger.Initialize()
 	config.SubstituteKeys(log)
+	config.ApplyOverrides(log)
 
 	// Secrets are resolved before the config is validated, on purpose: the
 	// blank-secret check has to see the values the fallbacks produced, and an

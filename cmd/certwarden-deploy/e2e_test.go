@@ -1123,3 +1123,156 @@ certificates:
 		t.Fatalf("expected validation error naming privatecert_format, got: %s", output)
 	}
 }
+
+// TestCLI_ResolvesSecretsFromEnvironmentAndFile is the end-to-end guard for #34
+// and #48: the config carries no literal key at all, only references.
+func TestCLI_ResolvesSecretsFromEnvironmentAndFile(t *testing.T) {
+	var gotCertKey, gotKeyKey string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, constants.CertificateApiPath):
+			gotCertKey = r.Header.Get(constants.ApiKeyHeaderName)
+			_, _ = w.Write([]byte("cert-body"))
+		case strings.HasPrefix(r.URL.Path, constants.KeyApiPath):
+			gotKeyKey = r.Header.Get(constants.ApiKeyHeaderName)
+			_, _ = w.Write([]byte("key-body"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	tmpDir := t.TempDir()
+	binaryPath := buildBinary(t)
+	credential := filepath.Join(tmpDir, "key-credential")
+	writeFile(t, credential, "file-key-secret\n")
+
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	writeFile(t, configPath, fmt.Sprintf(`base_url: %q
+default_cert_secret: "${CERTWARDEN_CERT_SECRET}"
+certificates:
+  - name: "example.com"
+    cert_path: %q
+    key_secret: "file:%s"
+    key_path: %q
+`, server.URL, filepath.Join(tmpDir, "cert.pem"), credential, filepath.Join(tmpDir, "key.pem")))
+
+	cmd := exec.Command(binaryPath, "-c", configPath)
+	cmd.Env = append(os.Environ(), "CERTWARDEN_CERT_SECRET=env-cert-secret")
+
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("expected a successful run: %v\n%s", err, string(output))
+	}
+
+	if gotCertKey != "env-cert-secret" {
+		t.Fatalf("expected the default from the environment to be used: got %q", gotCertKey)
+	}
+
+	if gotKeyKey != "file-key-secret" {
+		t.Fatalf("expected the trimmed file credential to be used: got %q", gotKeyKey)
+	}
+}
+
+// TestCLI_UnresolvableSecretFailsBeforeAnyRequest pins the #34 contract that a
+// broken reference stops the run before it touches the network.
+
+// TestCLI_UnresolvableSecretFailsBeforeAnyRequest pins the #34 contract that a
+// broken reference stops the run before it touches the network.
+func TestCLI_UnresolvableSecretFailsBeforeAnyRequest(t *testing.T) {
+	var requests int
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		_, _ = w.Write([]byte("cert-body"))
+	}))
+	defer server.Close()
+
+	tmpDir := t.TempDir()
+	binaryPath := buildBinary(t)
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	writeFile(t, configPath, fmt.Sprintf(`base_url: %q
+certificates:
+  - name: "example.com"
+    cert_secret: "${CERTWARDEN_DEFINITELY_UNSET_IN_E2E}"
+    cert_path: %q
+`, server.URL, filepath.Join(tmpDir, "cert.pem")))
+
+	output := runBinaryExpectingExitCode(t, 1, binaryPath, "-c", configPath)
+
+	if !strings.Contains(output, "CERTWARDEN_DEFINITELY_UNSET_IN_E2E") {
+		t.Fatalf("expected the error to name the unset variable, got: %s", output)
+	}
+
+	if requests != 0 {
+		t.Fatalf("expected no request to be made before validation failed, got %d", requests)
+	}
+}
+
+// TestCLI_BaseURLAndAPIKeyOverridesReachTheServer is the end-to-end guard for
+// #35. Both flags exist in the reference Python tool and neither of them works
+// there, so this asserts the whole path: the flag has to survive config loading
+// and actually change the request that goes out.
+func TestCLI_BaseURLAndAPIKeyOverridesReachTheServer(t *testing.T) {
+	var gotAPIKey string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAPIKey = r.Header.Get(constants.ApiKeyHeaderName)
+		_, _ = w.Write([]byte("cert-body"))
+	}))
+	defer server.Close()
+
+	tmpDir := t.TempDir()
+	binaryPath := buildBinary(t)
+	certPath := filepath.Join(tmpDir, "cert.pem")
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	// the config points somewhere that is not listening at all, so a passing
+	// test cannot be explained by the override being quietly ignored
+	writeFile(t, configPath, fmt.Sprintf(`base_url: "https://127.0.0.1:1"
+certificates:
+  - name: "example.com"
+    cert_secret: "config-secret"
+    cert_path: %q
+`, certPath))
+
+	runBinaryExpectingExitCode(t, 0, binaryPath,
+		"-c", configPath,
+		"--base-url", server.URL,
+		"--api-key", "flag-secret",
+	)
+
+	assertFileContents(t, certPath, "cert-body")
+
+	if gotAPIKey != "flag-secret" {
+		t.Fatalf("expected --api-key to reach the server: got %q", gotAPIKey)
+	}
+}
+
+// TestCLI_RejectsInvalidBaseURLOverride makes sure a bad --base-url is a config
+// error with exit code 1, not a request that fails in a confusing way later.
+
+// TestCLI_RejectsInvalidBaseURLOverride makes sure a bad --base-url is a config
+// error with exit code 1, not a request that fails in a confusing way later.
+func TestCLI_RejectsInvalidBaseURLOverride(t *testing.T) {
+	tmpDir := t.TempDir()
+	binaryPath := buildBinary(t)
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	writeFile(t, configPath, fmt.Sprintf(`base_url: "https://certwarden.example.com"
+certificates:
+  - name: "example.com"
+    cert_secret: "config-secret"
+    cert_path: %q
+`, filepath.Join(tmpDir, "cert.pem")))
+
+	output := runBinaryExpectingExitCode(t, 1, binaryPath, "-c", configPath, "--base-url", "not a url")
+
+	if !strings.Contains(output, "base_url") {
+		t.Fatalf("expected the error to name base_url, got: %s", output)
+	}
+}
+
+// TestCLI_ResolvesSecretsFromEnvironmentAndFile is the end-to-end guard for #34
+// and #48: the config carries no literal key at all, only references.

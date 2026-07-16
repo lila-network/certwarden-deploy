@@ -15,6 +15,8 @@ The binary accepts the following flags:
     3. `/etc/certwarden-deploy/config.yaml`
 
     If none of them exists, the tool exits with an error listing every path it searched. Setting `--config` explicitly disables the search: that file is used as-is and it is an error if it does not exist.
+- `--base-url`: override `base_url` from the config file. Validated as an absolute URL at startup
+- `--api-key`: override `cert_secret` and `key_secret` for **all** certificates. See [--api-key](#api-key) below
 - `-d, --dry-run`: show what would change without writing files. This also enables debug logging
 - `-f, --force`: write files and run actions even if the content on disk is unchanged
 - `--no-actions`: deploy the files but skip every post-rollout action. Overrides `actions.enabled` in the config file. Unlike `--dry-run`, files are still written
@@ -23,6 +25,28 @@ The binary accepts the following flags:
 - `--version`: print the version and exit
 
 If both `--quiet` and `--verbose` are set, `--quiet` wins.
+
+For any setting that can come from more than one place, the precedence is:
+
+```text
+CLI flag  >  environment variable  >  config file
+```
+
+### --api-key
+
+`--api-key` is blunt on purpose: it replaces both `cert_secret` and `key_secret` on *every* certificate, ignoring whatever the config file and the environment say.
+
+That makes it a debugging tool, not a deployment mechanism. It is for answering "is this key the problem?" in a single run:
+
+```console
+$ certwarden-deploy --dry-run --verbose --api-key "$SOME_KEY" --base-url https://staging.example.com
+```
+
+For a real deployment where one key covers many certificates, use [`default_cert_secret` / `default_key_secret`](#default-secrets) or `CERTWARDEN_API_KEY` instead.
+
+Because the flag is meant for exactly the situation where the config's `${VAR}` or `file:` references do not resolve on the machine you are debugging on, it short-circuits secret resolution entirely: an unset variable that `--api-key` is about to override is not reported as an error.
+
+Neither flag leaks a secret into the log: `--base-url` is not a secret and is logged with its value, the `--api-key` value is never logged at any level. Only the flag name is recorded.
 
 ## Example Configuration
 

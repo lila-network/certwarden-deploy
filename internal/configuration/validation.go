@@ -1,6 +1,7 @@
 package configuration
 
 import (
+	"net/url"
 	"regexp"
 	"strings"
 
@@ -40,6 +41,20 @@ func certificateName(name string) string {
 	return name
 }
 
+// isAbsoluteURL reports whether raw is a URL this tool can build a request from.
+//
+// url.Parse alone is not enough: it happily accepts "certwarden.example.com" as
+// a relative reference, which would then be concatenated into a nonsense request
+// URL, so the scheme and the host have to be there as well.
+func isAbsoluteURL(raw string) bool {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+
+	return parsed.Scheme != "" && parsed.Host != ""
+}
+
 // IsValid tests if the config read from file has all required parameters set.
 //
 // It has to run after ResolveSecrets: the cert_secret check below looks at the
@@ -54,6 +69,11 @@ func (c *ConfigFileData) IsValid() ConfigValidationError {
 
 	if c.BaseURL == "" {
 		err.Add(`Field 'base_url' in config file is required!`)
+	} else if !isAbsoluteURL(c.BaseURL) {
+		// this also covers --base-url: the override is folded into BaseURL
+		// before validation, so a typo on the command line is caught here
+		// rather than by a confusing failure on the first request
+		err.Add(`Field 'base_url' must be an absolute URL including the scheme, got "` + c.BaseURL + `"!`)
 	}
 
 	for _, cert := range c.Certificates {

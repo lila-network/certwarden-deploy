@@ -44,6 +44,7 @@ const (
 	secretFromCertificate secretSource = "certificate"
 	secretFromDefault     secretSource = "config default"
 	secretFromEnv         secretSource = "environment " + APIKeyEnvVar
+	secretFromFlag        secretSource = "flag --api-key"
 	secretUnset           secretSource = "unset"
 )
 
@@ -158,6 +159,11 @@ func (c *ConfigFileData) ResolveSecrets(logger *slog.Logger) ConfigValidationErr
 // resolveCertificateSecrets fills in the effective cert_secret/key_secret of
 // every configured certificate.
 func (c *ConfigFileData) resolveCertificateSecrets(err *ConfigValidationError, logger *slog.Logger) {
+	if APIKeyOverride != "" {
+		c.overrideCertificateSecrets(logger)
+		return
+	}
+
 	envFallback := os.Getenv(APIKeyEnvVar)
 	defaultCertSecret := resolveField(err, "default_cert_secret", "", c.DefaultCertificateSecret)
 	defaultKeySecret := resolveField(err, "default_key_secret", "", c.DefaultKeySecret)
@@ -189,5 +195,32 @@ func (c *ConfigFileData) resolveCertificateSecrets(err *ConfigValidationError, l
 			"cert_secret-source", string(certSource),
 			"key_secret-source", string(keySource),
 		)
+	}
+}
+
+// overrideCertificateSecrets applies --api-key to every certificate.
+//
+// The flag is deliberately blunt: it replaces both secrets on every
+// certificate, so it is only useful for a one-off debugging run against a
+// single key, never for a real deployment.
+//
+// It short-circuits resolution rather than being applied on top of it, because
+// --api-key exists precisely for runs where the config's references do not
+// resolve: erroring out over an unset ${VAR} that the flag is about to override
+// anyway would defeat the point of having the flag.
+//
+// Only the flag name is logged. The key itself never is.
+func (c *ConfigFileData) overrideCertificateSecrets(logger *slog.Logger) {
+	logger.Debug(
+		"Overriding cert_secret and key_secret for every certificate from CLI flag",
+		"flag", "--api-key",
+		"certificates", len(c.Certificates),
+		"cert_secret-source", string(secretFromFlag),
+		"key_secret-source", string(secretFromFlag),
+	)
+
+	for index := range c.Certificates {
+		c.Certificates[index].CertificateSecret = APIKeyOverride
+		c.Certificates[index].KeySecret = APIKeyOverride
 	}
 }
