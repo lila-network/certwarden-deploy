@@ -15,6 +15,12 @@ actions:
   # default is true
   enabled: true
 
+# Default API-Key for every certificate below that does not set its own
+# cert_secret / key_secret. Supports the same ${ENV} and file: references.
+# optional
+# default_cert_secret: "${CERTWARDEN_CERT_SECRET}"
+# default_key_secret: "${CERTWARDEN_KEY_SECRET}"
+
 # define all managed certificates here
 certificates:
 

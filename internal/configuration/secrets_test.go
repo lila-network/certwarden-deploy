@@ -291,3 +291,114 @@ func TestResolveSecretsErrorsNeverContainTheValue(t *testing.T) {
 		t.Fatalf("secret leaked through the validation error output: %q", logs.String())
 	}
 }
+
+// TestResolveSecretsPrecedence pins the full chain from #48:
+//
+//	per-certificate -> default_cert_secret/default_key_secret -> CERTWARDEN_API_KEY -> nothing
+func TestResolveSecretsPrecedence(t *testing.T) {
+	tests := []struct {
+		name       string
+		certSecret string
+		defaultVal string
+		envKey     string
+		want       string
+	}{
+		{
+			name:       "certificate beats default and env",
+			certSecret: "per-certificate",
+			defaultVal: "config-default",
+			envKey:     "env-api-key",
+			want:       "per-certificate",
+		},
+		{
+			name:       "default beats env",
+			defaultVal: "config-default",
+			envKey:     "env-api-key",
+			want:       "config-default",
+		},
+		{
+			name:   "env is the last resort",
+			envKey: "env-api-key",
+			want:   "env-api-key",
+		},
+		{
+			name: "nothing set leaves the secret blank for IsValid to reject",
+			want: "",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(APIKeyEnvVar, tc.envKey)
+
+			cfg := ConfigFileData{
+				DefaultCertificateSecret: tc.defaultVal,
+				DefaultKeySecret:         tc.defaultVal,
+				Certificates: []CertificateData{
+					{Name: "example.com", CertificateSecret: tc.certSecret, KeySecret: tc.certSecret},
+				},
+			}
+
+			assertNoMessages(t, cfg.ResolveSecrets(testLogger()))
+
+			if got := cfg.Certificates[0].CertificateSecret; got != tc.want {
+				t.Fatalf("unexpected cert_secret: got %q want %q", got, tc.want)
+			}
+
+			if got := cfg.Certificates[0].KeySecret; got != tc.want {
+				t.Fatalf("unexpected key_secret: got %q want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestResolveSecretsDefaultsSupportReferences makes sure the top-level defaults
+// are not a second-class citizen: they take the same ${VAR}/file: forms as the
+// per-certificate fields, which is the whole point of having one key in one place.
+func TestResolveSecretsDefaultsSupportReferences(t *testing.T) {
+	t.Setenv("CERTWARDEN_CERT_SECRET", "default-from-env")
+	t.Setenv(APIKeyEnvVar, "")
+
+	cfg := ConfigFileData{
+		DefaultCertificateSecret: "${CERTWARDEN_CERT_SECRET}",
+		DefaultKeySecret:         writeSecretFile(t, "default-from-file\n"),
+		Certificates: []CertificateData{
+			{Name: "one.example.com"},
+			{Name: "two.example.com"},
+		},
+	}
+
+	assertNoMessages(t, cfg.ResolveSecrets(testLogger()))
+
+	for _, cert := range cfg.Certificates {
+		if cert.CertificateSecret != "default-from-env" {
+			t.Fatalf("unexpected cert_secret for %s: got %q", cert.Name, cert.CertificateSecret)
+		}
+
+		if cert.KeySecret != "default-from-file" {
+			t.Fatalf("unexpected key_secret for %s: got %q", cert.Name, cert.KeySecret)
+		}
+	}
+}
+
+// TestResolveSecretsReportsBrokenDefaultReference makes sure a broken default is
+// named as the default, not blamed on one of the certificates using it.
+func TestResolveSecretsReportsBrokenDefaultReference(t *testing.T) {
+	os.Unsetenv("CERTWARDEN_DEFINITELY_UNSET")
+
+	cfg := ConfigFileData{
+		DefaultCertificateSecret: "${CERTWARDEN_DEFINITELY_UNSET}",
+		Certificates:             []CertificateData{{Name: "example.com"}},
+	}
+
+	err := cfg.ResolveSecrets(testLogger())
+	message := onlyMessage(t, err)
+
+	if !strings.Contains(message, "default_cert_secret") {
+		t.Fatalf("expected the message to name the default field, got %q", message)
+	}
+
+	if !strings.Contains(message, "CERTWARDEN_DEFINITELY_UNSET") {
+		t.Fatalf("expected the message to name the variable, got %q", message)
+	}
+}

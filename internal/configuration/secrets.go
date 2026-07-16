@@ -42,6 +42,7 @@ type secretSource string
 
 const (
 	secretFromCertificate secretSource = "certificate"
+	secretFromDefault     secretSource = "config default"
 	secretFromEnv         secretSource = "environment " + APIKeyEnvVar
 	secretUnset           secretSource = "unset"
 )
@@ -115,16 +116,19 @@ func resolveField(err *ConfigValidationError, field string, subject string, raw 
 	return ""
 }
 
-// pickSecret applies the secret precedence chain: the value configured on the
-// certificate wins, otherwise the CERTWARDEN_API_KEY environment variable is used.
+// pickSecret applies the secret precedence chain, most specific first:
+//
+//	per-certificate -> config-level default -> CERTWARDEN_API_KEY -> nothing
 //
 // An empty result is not an error here. Whether a certificate may end up without
 // a secret is IsValid's call, and it can only make that call once every fallback
 // has been applied.
-func pickSecret(certValue string, envValue string) (string, secretSource) {
+func pickSecret(certValue string, defaultValue string, envValue string) (string, secretSource) {
 	switch {
 	case certValue != "":
 		return certValue, secretFromCertificate
+	case defaultValue != "":
+		return defaultValue, secretFromDefault
 	case envValue != "":
 		return envValue, secretFromEnv
 	default:
@@ -155,17 +159,24 @@ func (c *ConfigFileData) ResolveSecrets(logger *slog.Logger) ConfigValidationErr
 // every configured certificate.
 func (c *ConfigFileData) resolveCertificateSecrets(err *ConfigValidationError, logger *slog.Logger) {
 	envFallback := os.Getenv(APIKeyEnvVar)
+	defaultCertSecret := resolveField(err, "default_cert_secret", "", c.DefaultCertificateSecret)
+	defaultKeySecret := resolveField(err, "default_key_secret", "", c.DefaultKeySecret)
 
 	for index := range c.Certificates {
 		cert := &c.Certificates[index]
 		subject := "for certificate " + certificateName(cert.Name)
 
+		// the per-certificate value is resolved even when a default would win
+		// anyway: a reference the user wrote down explicitly has to be reported
+		// when it is broken, not quietly stepped over
 		certSecret, certSource := pickSecret(
 			resolveField(err, "cert_secret", subject, cert.CertificateSecret),
+			defaultCertSecret,
 			envFallback,
 		)
 		keySecret, keySource := pickSecret(
 			resolveField(err, "key_secret", subject, cert.KeySecret),
+			defaultKeySecret,
 			envFallback,
 		)
 

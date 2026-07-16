@@ -42,6 +42,12 @@ func certificateName(name string) string {
 
 // IsValid tests if the config read from file has all required parameters set.
 //
+// It has to run after ResolveSecrets: the cert_secret check below looks at the
+// effective secret, so it may only ever see values that the config-level
+// defaults and the CERTWARDEN_API_KEY fallback have already been applied to.
+// Checking the raw file value would tell users to fix something they left out
+// on purpose.
+//
 // Exits the app if errors are detected
 func (c *ConfigFileData) IsValid() ConfigValidationError {
 	err := ConfigValidationError{}
@@ -57,7 +63,9 @@ func (c *ConfigFileData) IsValid() ConfigValidationError {
 		}
 
 		if cert.CertificateSecret == "" {
-			err.Add(`Field 'cert_secret' for certificate ` + cert.Name + " cannot be blank!")
+			err.Add(`Field 'cert_secret' for certificate ` + cert.Name +
+				` is set neither on the certificate nor as 'default_cert_secret', and ` +
+				APIKeyEnvVar + ` is not set either!`)
 		}
 
 		if cert.CertificatePath == "" {

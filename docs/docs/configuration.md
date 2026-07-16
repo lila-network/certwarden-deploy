@@ -89,6 +89,14 @@ actions:
   enabled: true
 ```
 
+`default_cert_secret`
+
+Optional. Default `cert_secret` for every certificate that does not set its own. See [Default secrets](#default-secrets).
+
+`default_key_secret`
+
+Optional. Default `key_secret` for every certificate that does not set its own.
+
 `certificates`
 
 Optional but normally expected. A list of certificate definitions. An empty list is valid, but nothing will be deployed.
@@ -228,9 +236,38 @@ A reference must make up the whole value: `${VAR}-suffix` is rejected instead of
 cert_secret: "$${this-is-not-a-reference}"   # resolves to ${this-is-not-a-reference}
 ```
 
+### Default secrets
+
+When one CertWarden API key covers many certificates, repeating it on every entry is noise. Two optional top-level keys provide a default for every certificate that does not set its own:
+
+```yaml
+default_cert_secret: "${CERTWARDEN_CERT_SECRET}"
+default_key_secret: "${CERTWARDEN_KEY_SECRET}"
+
+certificates:
+  - name: "example.com"          # uses both defaults
+    cert_path: "/etc/certs/{name}/fullchain.pem"
+    key_path: "/etc/certs/{name}/privkey.pem"
+
+  - name: "other.example.com"    # overrides the certificate default only
+    cert_secret: "${CERTWARDEN_OTHER_CERT_SECRET}"
+    cert_path: "/etc/certs/{name}/fullchain.pem"
+```
+
+They take the same `${VAR}` and `file:` references as the per-certificate fields.
+
+The precedence for each secret, most specific first:
+
+1. `cert_secret` / `key_secret` on the certificate
+2. `default_cert_secret` / `default_key_secret`
+3. the `CERTWARDEN_API_KEY` environment variable
+4. otherwise: a validation error naming all of the above
+
+These are two keys rather than one `api_key` on purpose. The reference Python tool uses a single `api_key`, but this tool has kept the certificate and key secrets apart since 0.2.0, and a single key cannot express that split.
+
 ### CERTWARDEN_API_KEY
 
-If a certificate has no `cert_secret` or `key_secret`, the `CERTWARDEN_API_KEY` environment variable is used for it.
+If a certificate has no `cert_secret` or `key_secret` and no default applies, the `CERTWARDEN_API_KEY` environment variable is used for it. It is the last fallback in the chain.
 
 ### Secrets and logs
 
@@ -445,7 +482,7 @@ Current startup validation checks these conditions before deployment begins:
 
 - `base_url` must be set
 - every configured certificate must have a non-empty `name`
-- every configured certificate must have a non-empty `cert_secret`
+- every configured certificate must end up with a non-empty `cert_secret`, from the certificate itself, from `default_cert_secret`, or from `CERTWARDEN_API_KEY`
 - every configured certificate must have a non-empty `cert_path`
 - `name` may only contain letters, numbers, dots, underscores, and hyphens
 - `run_on`, if set, must be one of `new`, `changed`, `new_or_changed`, `all`

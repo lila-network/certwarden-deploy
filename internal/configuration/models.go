@@ -24,10 +24,17 @@ var Force bool
 var NoActions bool
 
 // Struct to read the config file into when reading from disk
+//
+// DefaultCertificateSecret/DefaultKeySecret are deliberately two fields and not
+// one api_key: the reference Python tool uses a single api_key, but this repo
+// split cert and key secrets in 0.2.0 on purpose, and a single key cannot
+// express that split.
 type ConfigFileData struct {
 	BaseURL                      string            `yaml:"base_url"`
 	DisableCertificateValidation bool              `yaml:"disable_certificate_validation"`
 	Actions                      ActionsConfig     `yaml:"actions"`
+	DefaultCertificateSecret     string            `yaml:"default_cert_secret"`
+	DefaultKeySecret             string            `yaml:"default_key_secret"`
 	Certificates                 []CertificateData `yaml:"certificates"`
 }
 

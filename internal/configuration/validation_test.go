@@ -1,6 +1,17 @@
 package configuration
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+// blankSecretMessage builds the message IsValid reports for a certificate that
+// ended up with no usable cert_secret.
+func blankSecretMessage(name string) string {
+	return `Field 'cert_secret' for certificate ` + name +
+		` is set neither on the certificate nor as 'default_cert_secret', and ` +
+		APIKeyEnvVar + ` is not set either!`
+}
 
 func TestGetConfigWithNilLoaderReturnsError(t *testing.T) {
 	if _, err := GetConfig(nil); err == nil {
@@ -30,11 +41,11 @@ func TestConfigValidationReportsMissingAndInvalidFields(t *testing.T) {
 
 	expectedMessages := map[string]bool{
 		`Field 'base_url' in config file is required!`:                                   false,
-		`Field 'cert_secret' for certificate invalid name cannot be blank!`:              false,
+		blankSecretMessage("invalid name"):                                               false,
 		`Field 'cert_path' for certificate invalid name cannot be blank!`:                false,
 		`Field 'name' for certificate may only contain -_. and alphanumeric characters!`: false,
 		`Field 'name' for certificates cannot be blank!`:                                 false,
-		`Field 'cert_secret' for certificate unnamed_certificate cannot be blank!`:       false,
+		blankSecretMessage(unnamedCertificate):                                           false,
 		`Field 'cert_path' for certificate unnamed_certificate cannot be blank!`:         false,
 	}
 
@@ -323,5 +334,60 @@ func TestConfigValidationAcceptsEverySupportedDownloadFormat(t *testing.T) {
 				t.Fatalf("expected format %q to be valid, got %v", format, err.ErrorMessages)
 			}
 		})
+	}
+}
+
+// TestConfigValidationBlankSecretCheckRunsAfterDefaults is the regression guard
+// for the ordering #48 depends on: a certificate that deliberately leaves
+// cert_secret out is valid as long as a default fills it in, and IsValid must
+// not tell the user to set a field they left out on purpose.
+func TestConfigValidationBlankSecretCheckRunsAfterDefaults(t *testing.T) {
+	t.Setenv(APIKeyEnvVar, "")
+
+	cfg := ConfigFileData{
+		BaseURL:                  "https://certwarden.example.com",
+		DefaultCertificateSecret: "default-cert-secret",
+		DefaultKeySecret:         "default-key-secret",
+		Certificates: []CertificateData{
+			{Name: "example.com", CertificatePath: "/etc/certs/example.com.pem"},
+		},
+	}
+
+	// before resolution the raw field really is blank, which is exactly the
+	// state the old check used to reject
+	if cfg.Certificates[0].CertificateSecret != "" {
+		t.Fatal("precondition failed: cert_secret should start out blank")
+	}
+
+	resolution := cfg.ResolveSecrets(testLogger())
+	assertNoMessages(t, resolution)
+
+	if err := cfg.IsValid(); err.HasMessages() {
+		t.Fatalf("expected a defaulted certificate to validate, got %v", err.ErrorMessages)
+	}
+}
+
+// TestConfigValidationBlankSecretMessageNamesBothPlaces makes sure the error
+// points at every place the secret could have come from, not just the field on
+// the certificate.
+func TestConfigValidationBlankSecretMessageNamesBothPlaces(t *testing.T) {
+	t.Setenv(APIKeyEnvVar, "")
+
+	cfg := ConfigFileData{
+		BaseURL: "https://certwarden.example.com",
+		Certificates: []CertificateData{
+			{Name: "example.com", CertificatePath: "/etc/certs/example.com.pem"},
+		},
+	}
+
+	assertNoMessages(t, cfg.ResolveSecrets(testLogger()))
+
+	err := cfg.IsValid()
+	message := onlyMessage(t, err)
+
+	for _, want := range []string{"cert_secret", "example.com", "default_cert_secret", APIKeyEnvVar} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("expected message to mention %q, got %q", want, message)
+		}
 	}
 }
