@@ -3,6 +3,10 @@ Description=CertWarden Deployer binary
 Documentation=https://certwarden-deploy.lila.network
 
 [Service]
+Type=oneshot
+# Bound the run so a hanging or endlessly retrying deploy cannot wedge the unit.
+# Size this against your http.timeout and http.retries if you raise either.
+TimeoutStartSec=300
 # uncomment if you want to use a different user than root
 # User=certwarden-deploy
 # Group=certwarden-deploy

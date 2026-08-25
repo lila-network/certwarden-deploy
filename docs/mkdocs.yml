@@ -10,6 +10,7 @@ nav:
   - index.md
   - installation.md
   - configuration.md
+  - commands.md
   - license.md
 
 theme:

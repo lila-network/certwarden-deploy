@@ -1,6 +1,7 @@
 package logger
 
 import (
+	"io"
 	"log/slog"
 	"os"
 	"strconv"
@@ -10,6 +11,16 @@ import (
 
 // Initialize initializes a *slog.Logger with the right log level and options.
 func Initialize() *slog.Logger {
+	return InitializeTo(os.Stdout)
+}
+
+// InitializeTo is Initialize with an explicit destination for the log records.
+//
+// It exists for the subcommands whose output is data rather than prose: `fetch
+// certificate example.com` has to survive being piped into openssl, and a log
+// record landing in the middle of that pipe would corrupt it. Those commands
+// log to stderr and keep stdout for the material itself.
+func InitializeTo(w io.Writer) *slog.Logger {
 	logLevel := slog.LevelInfo
 
 	if configuration.VerboseLogging {
@@ -26,7 +37,7 @@ func Initialize() *slog.Logger {
 		Level: logLevel,
 	}
 
-	handler := slog.NewTextHandler(os.Stdout, opts)
+	handler := slog.NewTextHandler(w, opts)
 	log := slog.New(handler)
 
 	log.Debug("configuration.VerboseLogging is " + strconv.FormatBool(configuration.VerboseLogging))

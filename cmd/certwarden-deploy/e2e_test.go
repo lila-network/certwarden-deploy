@@ -1,11 +1,14 @@
 package main
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -162,11 +165,173 @@ func buildBinary(t *testing.T) string {
 func runBinary(t *testing.T, binaryPath string, args ...string) {
 	t.Helper()
 
+	runBinaryExpectingExitCode(t, 0, binaryPath, args...)
+}
+
+// runBinaryExpectingExitCode runs the binary and asserts its exit code.
+//
+// The exit code is part of the public contract of the tool, so it is asserted
+// against plain numbers on purpose: the test must fail if the constants behind
+// them ever move.
+func runBinaryExpectingExitCode(t *testing.T, wantCode int, binaryPath string, args ...string) string {
+	t.Helper()
+
 	cmd := exec.Command(binaryPath, args...)
 	output, err := cmd.CombinedOutput()
+
+	gotCode := 0
 	if err != nil {
-		t.Fatalf("binary execution failed: %v\n%s", err, string(output))
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) {
+			t.Fatalf("binary execution failed: %v\n%s", err, string(output))
+		}
+		gotCode = exitErr.ExitCode()
 	}
+
+	if gotCode != wantCode {
+		t.Fatalf("unexpected exit code: got %d want %d\n%s", gotCode, wantCode, string(output))
+	}
+
+	return string(output)
+}
+
+// e2eCert describes one certificate entry for the generated config file.
+//
+// privateCertPath and privateCertChainPath are only written to the config file
+// when set, so the common case stays byte-identical to a config that predates
+// those keys.
+type e2eCert struct {
+	name string
+
+	// action is the string form of the action, rendered as a scalar.
+	action string
+
+	// actionArgs is the list form of the action, rendered as a sequence. It
+	// takes precedence over action when both are set.
+	actionArgs []string
+
+	// runOn is rendered as run_on when non-empty, and omitted otherwise so the
+	// default policy is exercised.
+	runOn string
+
+	certPath             string
+	keyPath              string
+	caPath               string
+	privateCertPath      string
+	privateCertChainPath string
+}
+
+func newE2ECert(tmpDir string, name string) e2eCert {
+	return e2eCert{
+		name:     name,
+		certPath: filepath.Join(tmpDir, "certs", name+"-cert.pem"),
+		keyPath:  filepath.Join(tmpDir, "certs", name+"-key.pem"),
+		caPath:   filepath.Join(tmpDir, "certs", name+"-ca.pem"),
+	}
+}
+
+// startCertServer serves certificate data for every requested name and answers
+// with 401 for the names listed in unauthorized.
+func startCertServer(t *testing.T, unauthorized ...string) *httptest.Server {
+	t.Helper()
+
+	denied := make(map[string]bool, len(unauthorized))
+	for _, name := range unauthorized {
+		denied[name] = true
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		name := path.Base(r.URL.Path)
+		if denied[name] {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+
+		switch {
+		case strings.HasPrefix(r.URL.Path, constants.CertificateApiPath):
+			_, _ = w.Write([]byte("cert-body-" + name))
+		case strings.HasPrefix(r.URL.Path, constants.KeyApiPath):
+			_, _ = w.Write([]byte("key-body-" + name))
+		case strings.HasPrefix(r.URL.Path, constants.CaCertificateApiPath):
+			_, _ = w.Write([]byte("ca-body-" + name))
+		case strings.HasPrefix(r.URL.Path, constants.PrivateCertApiPath):
+			_, _ = w.Write([]byte("privatecert-body-" + name))
+		case strings.HasPrefix(r.URL.Path, constants.PrivateCertChainApiPath):
+			_, _ = w.Write([]byte("privatecertchain-body-" + name))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	return server
+}
+
+func writeE2EConfig(t *testing.T, configPath string, baseURL string, certs ...e2eCert) {
+	t.Helper()
+
+	writeE2EConfigWithActions(t, configPath, baseURL, "", certs...)
+}
+
+// writeE2EConfigWithActions renders a config file, optionally with a top-level
+// actions block. An empty actionsBlock omits the key entirely, which is what
+// exercises the default.
+func writeE2EConfigWithActions(t *testing.T, configPath string, baseURL string, actionsBlock string, certs ...e2eCert) {
+	t.Helper()
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "base_url: %q\ndisable_certificate_validation: false\n", baseURL)
+
+	if actionsBlock != "" {
+		b.WriteString(actionsBlock)
+	}
+
+	b.WriteString("certificates:\n")
+
+	for _, cert := range certs {
+		fmt.Fprintf(&b, `  - name: %q
+    cert_secret: "cert-secret"
+    cert_path: %q
+    key_secret: "key-secret"
+    key_path: %q
+    ca_path: %q
+`, cert.name, cert.certPath, cert.keyPath, cert.caPath)
+
+		// An empty action must be omitted entirely: an action key that is
+		// present but blank is a config error, not "no action".
+		switch {
+		case len(cert.actionArgs) > 0:
+			b.WriteString("    action:\n")
+			for _, arg := range cert.actionArgs {
+				fmt.Fprintf(&b, "      - %q\n", arg)
+			}
+		case cert.action != "":
+			fmt.Fprintf(&b, "    action: %q\n", cert.action)
+		}
+
+		if cert.runOn != "" {
+			fmt.Fprintf(&b, "    run_on: %q\n", cert.runOn)
+		}
+
+		if cert.privateCertPath != "" {
+			fmt.Fprintf(&b, "    privatecert_path: %q\n", cert.privateCertPath)
+		}
+
+		if cert.privateCertChainPath != "" {
+			fmt.Fprintf(&b, "    privatecertchain_path: %q\n", cert.privateCertChainPath)
+		}
+	}
+
+	writeFile(t, configPath, b.String())
+}
+
+func writeFailingAction(t *testing.T, tmpDir string, name string) string {
+	t.Helper()
+
+	script := filepath.Join(tmpDir, name+"-failing-action.sh")
+	writeExecutableFile(t, script, "#!/bin/sh\nexit 7\n")
+
+	return script
 }
 
 func writeFile(t *testing.T, path string, content string) {
@@ -209,5 +374,1012 @@ func assertActionCount(t *testing.T, path string, want int) {
 	got := len(strings.Fields(string(data)))
 	if got != want {
 		t.Fatalf("unexpected action count: got %d want %d", got, want)
+	}
+}
+
+func TestCLI_ExitsZeroWhenEverythingSucceeds(t *testing.T) {
+	server := startCertServer(t)
+
+	tmpDir := t.TempDir()
+	binaryPath := buildBinary(t)
+	actionMarker := filepath.Join(tmpDir, "action.log")
+	actionScript := filepath.Join(tmpDir, "post-deploy.sh")
+	writeExecutableFile(t, actionScript, fmt.Sprintf("#!/bin/sh\nprintf 'run\\n' >> %q\n", actionMarker))
+
+	cert := newE2ECert(tmpDir, "example.com")
+	cert.action = actionScript
+
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	writeE2EConfig(t, configPath, server.URL, cert)
+
+	runBinaryExpectingExitCode(t, 0, binaryPath, "-c", configPath)
+
+	assertFileContents(t, cert.certPath, "cert-body-example.com")
+	assertActionCount(t, actionMarker, 1)
+}
+
+func TestCLI_ExitsTwoWhenCertificateRolloutFails(t *testing.T) {
+	server := startCertServer(t, "example.com")
+
+	tmpDir := t.TempDir()
+	binaryPath := buildBinary(t)
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	writeE2EConfig(t, configPath, server.URL, newE2ECert(tmpDir, "example.com"))
+
+	runBinaryExpectingExitCode(t, 2, binaryPath, "-c", configPath)
+}
+
+func TestCLI_ExitsThreeWhenOnlyActionFails(t *testing.T) {
+	server := startCertServer(t)
+
+	tmpDir := t.TempDir()
+	binaryPath := buildBinary(t)
+
+	cert := newE2ECert(tmpDir, "example.com")
+	cert.action = writeFailingAction(t, tmpDir, "example.com")
+
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	writeE2EConfig(t, configPath, server.URL, cert)
+
+	runBinaryExpectingExitCode(t, 3, binaryPath, "-c", configPath)
+
+	// The certificate itself was deployed just fine, only the action broke.
+	assertFileContents(t, cert.certPath, "cert-body-example.com")
+}
+
+func TestCLI_CertificateFailureOutranksActionFailure(t *testing.T) {
+	server := startCertServer(t, "broken.example.com")
+
+	tmpDir := t.TempDir()
+	binaryPath := buildBinary(t)
+
+	broken := newE2ECert(tmpDir, "broken.example.com")
+	working := newE2ECert(tmpDir, "working.example.com")
+	working.action = writeFailingAction(t, tmpDir, "working.example.com")
+
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	writeE2EConfig(t, configPath, server.URL, broken, working)
+
+	runBinaryExpectingExitCode(t, 2, binaryPath, "-c", configPath)
+}
+
+// A single broken certificate must never keep the other certificates from being
+// deployed. This is the regression guard for the "record, do not abort"
+// behaviour of HandleCertificates.
+func TestCLI_ContinuesProcessingAfterFailingCertificate(t *testing.T) {
+	server := startCertServer(t, "broken.example.com")
+
+	tmpDir := t.TempDir()
+	binaryPath := buildBinary(t)
+	actionMarker := filepath.Join(tmpDir, "action.log")
+	actionScript := filepath.Join(tmpDir, "post-deploy.sh")
+	writeExecutableFile(t, actionScript, fmt.Sprintf("#!/bin/sh\nprintf 'run\\n' >> %q\n", actionMarker))
+
+	broken := newE2ECert(tmpDir, "broken.example.com")
+	healthy := newE2ECert(tmpDir, "healthy.example.com")
+	healthy.action = actionScript
+
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	writeE2EConfig(t, configPath, server.URL, broken, healthy)
+
+	runBinaryExpectingExitCode(t, 2, binaryPath, "-c", configPath)
+
+	if _, err := os.Stat(broken.certPath); !os.IsNotExist(err) {
+		t.Fatalf("expected broken certificate to be absent, got err=%v", err)
+	}
+
+	assertFileContents(t, healthy.certPath, "cert-body-healthy.example.com")
+	assertFileContents(t, healthy.keyPath, "key-body-healthy.example.com")
+	assertFileContents(t, healthy.caPath, "ca-body-healthy.example.com")
+	assertActionCount(t, actionMarker, 1)
+}
+
+func TestCLI_ForceDoesNotMaskCertificateFailure(t *testing.T) {
+	server := startCertServer(t, "broken.example.com")
+
+	tmpDir := t.TempDir()
+	binaryPath := buildBinary(t)
+
+	broken := newE2ECert(tmpDir, "broken.example.com")
+	healthy := newE2ECert(tmpDir, "healthy.example.com")
+
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	writeE2EConfig(t, configPath, server.URL, broken, healthy)
+
+	runBinaryExpectingExitCode(t, 2, binaryPath, "--force", "-c", configPath)
+
+	assertFileContents(t, healthy.certPath, "cert-body-healthy.example.com")
+}
+
+// A fetch failure during --dry-run is not hypothetical: the request really was
+// sent and really did fail. Only the write and the action are simulated, so the
+// run still reports the certificate failure with exit code 2.
+func TestCLI_DryRunExitsTwoOnFetchFailure(t *testing.T) {
+	server := startCertServer(t, "broken.example.com")
+
+	tmpDir := t.TempDir()
+	binaryPath := buildBinary(t)
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	broken := newE2ECert(tmpDir, "broken.example.com")
+	writeE2EConfig(t, configPath, server.URL, broken)
+
+	runBinaryExpectingExitCode(t, 2, binaryPath, "--dry-run", "-c", configPath)
+
+	if _, err := os.Stat(broken.certPath); !os.IsNotExist(err) {
+		t.Fatalf("expected no file to be written during dry-run, got err=%v", err)
+	}
+}
+
+// TestCLI_FailingKeyLeavesOldCertificateOnDisk is the end-to-end guard for #28.
+//
+// A certificate is only usable next to the key it was issued for, so a run that
+// cannot fetch the key must leave the pair on disk exactly as it found it. The
+// old behaviour deployed the certificate first and bailed out on the key, which
+// left a mismatched pair that only surfaced on the next unrelated restart of
+// the TLS server.
+func TestCLI_FailingKeyLeavesOldCertificateOnDisk(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, constants.KeyApiPath) {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		_, _ = w.Write([]byte("new-body-" + path.Base(r.URL.Path)))
+	}))
+	defer server.Close()
+
+	tmpDir := t.TempDir()
+	binaryPath := buildBinary(t)
+
+	cert := newE2ECert(tmpDir, "example.com")
+	certDir := filepath.Dir(cert.certPath)
+	if err := os.MkdirAll(certDir, 0755); err != nil {
+		t.Fatalf("failed to create certificate directory: %v", err)
+	}
+
+	writeFile(t, cert.certPath, "old-cert-body")
+	writeFile(t, cert.keyPath, "old-key-body")
+
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	writeE2EConfig(t, configPath, server.URL, cert)
+
+	runBinaryExpectingExitCode(t, 2, binaryPath, "-c", configPath)
+
+	assertFileContents(t, cert.certPath, "old-cert-body")
+	assertFileContents(t, cert.keyPath, "old-key-body")
+
+	if _, err := os.Stat(cert.caPath); !os.IsNotExist(err) {
+		t.Fatalf("expected CA to not be deployed, got err=%v", err)
+	}
+
+	// the aborted rollout must not litter the target directory either
+	leftovers, err := filepath.Glob(filepath.Join(certDir, ".certwarden-deploy-*"))
+	if err != nil {
+		t.Fatalf("failed to glob for temporary files: %v", err)
+	}
+
+	if len(leftovers) != 0 {
+		t.Fatalf("temporary files left behind in %s: %v", certDir, leftovers)
+	}
+}
+
+// TestCLI_RunsShellFormAndListFormActions drives both action forms end to end,
+// through the YAML parser and the real binary.
+func TestCLI_RunsShellFormAndListFormActions(t *testing.T) {
+	server := startCertServer(t)
+
+	tmpDir := t.TempDir()
+	binaryPath := buildBinary(t)
+	marker := filepath.Join(tmpDir, "actions.log")
+
+	// string form: a && chain with redirects, none of which survive being
+	// split on whitespace and exec'd directly
+	shellCert := newE2ECert(tmpDir, "shell.example.com")
+	shellCert.action = "printf 'shell cert renewed\\n' >> " + marker +
+		" && printf 'chained\\n' >> " + marker
+
+	// list form: arguments are handed to the binary untouched, so a space and
+	// an && stay data instead of turning into syntax
+	listScript := filepath.Join(tmpDir, "list-action.sh")
+	writeExecutableFile(t, listScript, fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' \"$@\" >> %q\n", marker))
+
+	listCert := newE2ECert(tmpDir, "list.example.com")
+	listCert.actionArgs = []string{listScript, "cert renewed", "&&"}
+
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	writeE2EConfig(t, configPath, server.URL, shellCert, listCert)
+
+	runBinaryExpectingExitCode(t, 0, binaryPath, "-c", configPath)
+
+	assertFileContents(t, marker, "shell cert renewed\nchained\ncert renewed\n&&\n")
+}
+
+// TestCLI_BlankActionWarnsButStillDeploys pins that an action key that is
+// present but empty is a warning, not a fatal config error. Refusing to start
+// would stop every certificate in the config from deploying because one action
+// line is blank -- a config that deploys nothing is worse than one that runs
+// nothing.
+func TestCLI_BlankActionWarnsButStillDeploys(t *testing.T) {
+	server := startCertServer(t)
+
+	tmpDir := t.TempDir()
+	binaryPath := buildBinary(t)
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	cert := newE2ECert(tmpDir, "example.com")
+	writeFile(t, configPath, fmt.Sprintf(`base_url: %q
+certificates:
+  - name: %q
+    cert_secret: "cert-secret"
+    cert_path: %q
+    action: "   "
+`, server.URL, cert.name, cert.certPath))
+
+	output := runBinaryExpectingExitCode(t, 0, binaryPath, "-c", configPath, "-v")
+
+	if !strings.Contains(output, "Action is configured but empty") {
+		t.Fatalf("expected a blank-action warning, got:\n%s", output)
+	}
+
+	if _, err := os.Stat(cert.certPath); err != nil {
+		t.Fatalf("certificate was not deployed despite the blank action: %v", err)
+	}
+}
+
+// TestCLI_RunOnChangedSkipsFirstDeployment drives run_on through the YAML
+// parser: on the first run the file is created, which run_on: changed must not
+// treat as a change. Only the second, differing rollout fires the action.
+func TestCLI_RunOnChangedSkipsFirstDeployment(t *testing.T) {
+	body := "cert-body-v1"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(body))
+	}))
+	defer server.Close()
+
+	tmpDir := t.TempDir()
+	binaryPath := buildBinary(t)
+	marker := filepath.Join(tmpDir, "action.log")
+	actionScript := filepath.Join(tmpDir, "post-deploy.sh")
+	writeExecutableFile(t, actionScript, fmt.Sprintf("#!/bin/sh\nprintf 'run\\n' >> %q\n", marker))
+
+	cert := newE2ECert(tmpDir, "example.com")
+	cert.action = actionScript
+	cert.runOn = "changed"
+
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	writeE2EConfig(t, configPath, server.URL, cert)
+
+	runBinaryExpectingExitCode(t, 0, binaryPath, "-c", configPath)
+	assertFileContents(t, cert.certPath, body)
+
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("expected run_on: changed not to fire on a first deployment, got err=%v", err)
+	}
+
+	// nothing moved, still no action
+	runBinaryExpectingExitCode(t, 0, binaryPath, "-c", configPath)
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("expected run_on: changed not to fire on an unchanged run, got err=%v", err)
+	}
+
+	// now the content really changes
+	body = "cert-body-v2"
+	runBinaryExpectingExitCode(t, 0, binaryPath, "-c", configPath)
+	assertFileContents(t, cert.certPath, body)
+	assertActionCount(t, marker, 1)
+}
+
+// TestCLI_RunOnAllRunsWithoutAnyChange covers the opposite end of the policy
+// table: run_on: all fires even when nothing was written.
+func TestCLI_RunOnAllRunsWithoutAnyChange(t *testing.T) {
+	server := startCertServer(t)
+
+	tmpDir := t.TempDir()
+	binaryPath := buildBinary(t)
+	marker := filepath.Join(tmpDir, "action.log")
+	actionScript := filepath.Join(tmpDir, "post-deploy.sh")
+	writeExecutableFile(t, actionScript, fmt.Sprintf("#!/bin/sh\nprintf 'run\\n' >> %q\n", marker))
+
+	cert := newE2ECert(tmpDir, "example.com")
+	cert.action = actionScript
+	cert.runOn = "all"
+
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	writeE2EConfig(t, configPath, server.URL, cert)
+
+	runBinaryExpectingExitCode(t, 0, binaryPath, "-c", configPath)
+	assertActionCount(t, marker, 1)
+
+	// second run changes nothing on disk, the action still runs
+	runBinaryExpectingExitCode(t, 0, binaryPath, "-c", configPath)
+	assertActionCount(t, marker, 2)
+}
+
+func TestCLI_RejectsUnknownRunOn(t *testing.T) {
+	server := startCertServer(t)
+
+	tmpDir := t.TempDir()
+	binaryPath := buildBinary(t)
+
+	cert := newE2ECert(tmpDir, "example.com")
+	cert.runOn = "on_change"
+
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	writeE2EConfig(t, configPath, server.URL, cert)
+
+	output := runBinaryExpectingExitCode(t, 1, binaryPath, "-c", configPath)
+
+	if !strings.Contains(output, "Field 'run_on' for certificate example.com must be one of") {
+		t.Fatalf("expected an unknown run_on validation error, got:\n%s", output)
+	}
+
+	if _, err := os.Stat(cert.certPath); !os.IsNotExist(err) {
+		t.Fatalf("expected validation to stop the run before deploying, got err=%v", err)
+	}
+}
+
+// TestCLI_ActionsToggle drives #46 end to end: files must deploy in every
+// case, only the action is suppressed, and a suppressed action never turns a
+// green run red.
+func TestCLI_ActionsToggle(t *testing.T) {
+	tests := []struct {
+		name         string
+		actionsBlock string
+		args         []string
+		wantAction   bool
+	}{
+		{
+			name:       "default is on",
+			wantAction: true,
+		},
+		{
+			name:         "config on",
+			actionsBlock: "actions:\n  enabled: true\n",
+			wantAction:   true,
+		},
+		{
+			name:         "config off",
+			actionsBlock: "actions:\n  enabled: false\n",
+			wantAction:   false,
+		},
+		{
+			name:       "no-actions flag",
+			args:       []string{"--no-actions"},
+			wantAction: false,
+		},
+		{
+			name:         "flag overrides config on",
+			actionsBlock: "actions:\n  enabled: true\n",
+			args:         []string{"--no-actions"},
+			wantAction:   false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			server := startCertServer(t)
+
+			tmpDir := t.TempDir()
+			binaryPath := buildBinary(t)
+			marker := filepath.Join(tmpDir, "action.log")
+			actionScript := filepath.Join(tmpDir, "post-deploy.sh")
+			writeExecutableFile(t, actionScript, fmt.Sprintf("#!/bin/sh\nprintf 'run\\n' >> %q\n", marker))
+
+			cert := newE2ECert(tmpDir, "example.com")
+			cert.action = actionScript
+
+			configPath := filepath.Join(tmpDir, "config.yaml")
+			writeE2EConfigWithActions(t, configPath, server.URL, tc.actionsBlock, cert)
+
+			args := append([]string{"-c", configPath}, tc.args...)
+			output := runBinaryExpectingExitCode(t, 0, binaryPath, args...)
+
+			// The whole point of #46: deploy the files either way.
+			assertFileContents(t, cert.certPath, "cert-body-example.com")
+			assertFileContents(t, cert.keyPath, "key-body-example.com")
+			assertFileContents(t, cert.caPath, "ca-body-example.com")
+
+			if tc.wantAction {
+				assertActionCount(t, marker, 1)
+				return
+			}
+
+			if _, err := os.Stat(marker); !os.IsNotExist(err) {
+				t.Fatalf("expected the action to be suppressed, got err=%v", err)
+			}
+
+			if !strings.Contains(output, "Actions are disabled") || !strings.Contains(output, actionScript) {
+				t.Fatalf("expected the skipped command to be logged, got:\n%s", output)
+			}
+		})
+	}
+}
+
+// TestCLI_SuppressedActionDoesNotExitThree pins that switching actions off
+// cannot produce an action failure, even for an action that always fails.
+func TestCLI_SuppressedActionDoesNotExitThree(t *testing.T) {
+	server := startCertServer(t)
+
+	tmpDir := t.TempDir()
+	binaryPath := buildBinary(t)
+
+	cert := newE2ECert(tmpDir, "example.com")
+	cert.action = writeFailingAction(t, tmpDir, "example.com")
+
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	writeE2EConfig(t, configPath, server.URL, cert)
+
+	// sanity: this very config exits 3 while actions are on
+	runBinaryExpectingExitCode(t, 3, binaryPath, "-c", configPath)
+
+	// and is green with them off, while still deploying
+	os.Remove(cert.certPath)
+	runBinaryExpectingExitCode(t, 0, binaryPath, "--no-actions", "-c", configPath)
+	assertFileContents(t, cert.certPath, "cert-body-example.com")
+}
+
+// TestCLI_SummaryReportsMixedRun checks the record an operator sees at the end
+// of a real run with a bit of everything in it.
+func TestCLI_SummaryReportsMixedRun(t *testing.T) {
+	server := startCertServer(t, "broken.example.com")
+
+	tmpDir := t.TempDir()
+	binaryPath := buildBinary(t)
+
+	broken := newE2ECert(tmpDir, "broken.example.com")
+
+	unchanged := newE2ECert(tmpDir, "unchanged.example.com")
+	fresh := newE2ECert(tmpDir, "fresh.example.com")
+
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	writeE2EConfig(t, configPath, server.URL, broken, unchanged, fresh)
+
+	// first run deploys unchanged.example.com and fresh.example.com
+	runBinaryExpectingExitCode(t, 2, binaryPath, "-c", configPath)
+
+	// wipe one of them so the second run has a new one and an unchanged one
+	for _, path := range []string{fresh.certPath, fresh.keyPath, fresh.caPath} {
+		if err := os.Remove(path); err != nil {
+			t.Fatalf("failed to remove %s: %v", path, err)
+		}
+	}
+
+	output := runBinaryExpectingExitCode(t, 2, binaryPath, "-c", configPath)
+
+	summary := findOutputLine(t, output, "run summary")
+	for _, want := range []string{
+		"level=INFO",
+		"new=1",
+		"changed=0",
+		"unchanged=1",
+		"failed=1",
+		"action_failed=0",
+		"action_skipped=0",
+		"total=3",
+	} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("expected %q in the summary, got: %s\nfull output:\n%s", want, summary, output)
+		}
+	}
+
+	failure := findOutputLine(t, output, "msg=\"certificate failed\"")
+	for _, want := range []string{"level=ERROR", "name=broken.example.com", "file-type=certificate"} {
+		if !strings.Contains(failure, want) {
+			t.Fatalf("expected %q in the failure line, got: %s", want, failure)
+		}
+	}
+}
+
+// TestCLI_QuietRunIsSilentOnSuccess and its failing counterpart below are the
+// --quiet contract: nothing at all when the run worked, the summary and the
+// failures when it did not.
+func TestCLI_QuietRunIsSilentOnSuccess(t *testing.T) {
+	server := startCertServer(t)
+
+	tmpDir := t.TempDir()
+	binaryPath := buildBinary(t)
+	marker := filepath.Join(tmpDir, "action.log")
+	actionScript := filepath.Join(tmpDir, "post-deploy.sh")
+	writeExecutableFile(t, actionScript, fmt.Sprintf("#!/bin/sh\nprintf 'run\\n' >> %q\n", marker))
+
+	cert := newE2ECert(tmpDir, "example.com")
+	cert.action = actionScript
+
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	writeE2EConfig(t, configPath, server.URL, cert)
+
+	output := runBinaryExpectingExitCode(t, 0, binaryPath, "--quiet", "-c", configPath)
+
+	if strings.TrimSpace(output) != "" {
+		t.Fatalf("expected a successful quiet run to print nothing, got:\n%s", output)
+	}
+
+	// it really did run, it was just quiet about it
+	assertFileContents(t, cert.certPath, "cert-body-example.com")
+	assertActionCount(t, marker, 1)
+}
+
+func TestCLI_QuietRunReportsFailures(t *testing.T) {
+	server := startCertServer(t, "broken.example.com")
+
+	tmpDir := t.TempDir()
+	binaryPath := buildBinary(t)
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	writeE2EConfig(t, configPath, server.URL, newE2ECert(tmpDir, "broken.example.com"))
+
+	output := runBinaryExpectingExitCode(t, 2, binaryPath, "--quiet", "-c", configPath)
+
+	// the summary must survive --quiet when the run failed
+	summary := findOutputLine(t, output, "run summary")
+	if !strings.Contains(summary, "level=ERROR") {
+		t.Fatalf("expected the summary at ERROR under --quiet, got: %s", summary)
+	}
+
+	for _, want := range []string{"failed=1", "total=1"} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("expected %q in the quiet summary, got: %s", want, summary)
+		}
+	}
+
+	failure := findOutputLine(t, output, "msg=\"certificate failed\"")
+	if !strings.Contains(failure, "name=broken.example.com") {
+		t.Fatalf("expected the failing certificate to be named, got: %s", failure)
+	}
+}
+
+func TestCLI_DryRunSummaryIsMarked(t *testing.T) {
+	server := startCertServer(t)
+
+	tmpDir := t.TempDir()
+	binaryPath := buildBinary(t)
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	writeE2EConfig(t, configPath, server.URL, newE2ECert(tmpDir, "example.com"))
+
+	output := runBinaryExpectingExitCode(t, 0, binaryPath, "--dry-run", "-c", configPath)
+
+	summary := findOutputLine(t, output, "run summary")
+	if !strings.Contains(summary, "DRY-RUN: run summary") {
+		t.Fatalf("expected the dry-run summary to be marked, got: %s", summary)
+	}
+
+	if !strings.Contains(summary, "new=1") || !strings.Contains(summary, "total=1") {
+		t.Fatalf("expected a dry run to still report what it would do, got: %s", summary)
+	}
+}
+
+// TestCLI_SummaryReportsSkippedActions ties #46 to the summary: a run with
+// actions off must say so rather than look like a run with nothing to do.
+func TestCLI_SummaryReportsSkippedActions(t *testing.T) {
+	server := startCertServer(t)
+
+	tmpDir := t.TempDir()
+	binaryPath := buildBinary(t)
+	actionScript := filepath.Join(tmpDir, "post-deploy.sh")
+	writeExecutableFile(t, actionScript, "#!/bin/sh\nexit 0\n")
+
+	cert := newE2ECert(tmpDir, "example.com")
+	cert.action = actionScript
+
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	writeE2EConfig(t, configPath, server.URL, cert)
+
+	output := runBinaryExpectingExitCode(t, 0, binaryPath, "--no-actions", "-c", configPath)
+
+	summary := findOutputLine(t, output, "run summary")
+	if !strings.Contains(summary, "action_skipped=1") || !strings.Contains(summary, "action_failed=0") {
+		t.Fatalf("expected the skipped action to be counted, got: %s", summary)
+	}
+}
+
+// findOutputLine returns the first line of binary output containing substr.
+func findOutputLine(t *testing.T, output string, substr string) string {
+	t.Helper()
+
+	for _, line := range strings.Split(output, "\n") {
+		if strings.Contains(line, substr) {
+			return line
+		}
+	}
+
+	t.Fatalf("no output line containing %q found in:\n%s", substr, output)
+	return ""
+}
+
+// The two combined endpoints must flow through the same rollout path as the
+// classic three, including the action that fires once on first deployment and
+// not again on an unchanged second run.
+func TestCLI_DeploysPrivateCertEndpoints(t *testing.T) {
+	server := startCertServer(t)
+
+	tmpDir := t.TempDir()
+	binaryPath := buildBinary(t)
+	actionMarker := filepath.Join(tmpDir, "action.log")
+	actionScript := filepath.Join(tmpDir, "post-deploy.sh")
+	writeExecutableFile(t, actionScript, fmt.Sprintf("#!/bin/sh\nprintf 'run\\n' >> %q\n", actionMarker))
+
+	cert := newE2ECert(tmpDir, "example.com")
+	cert.action = actionScript
+	cert.privateCertPath = filepath.Join(tmpDir, "certs", "example.com.pem")
+	cert.privateCertChainPath = filepath.Join(tmpDir, "certs", "example.com-fullchain.pem")
+
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	writeE2EConfig(t, configPath, server.URL, cert)
+
+	runBinaryExpectingExitCode(t, 0, binaryPath, "-c", configPath)
+
+	assertFileContents(t, cert.privateCertPath, "privatecert-body-example.com")
+	assertFileContents(t, cert.privateCertChainPath, "privatecertchain-body-example.com")
+	assertActionCount(t, actionMarker, 1)
+
+	runBinaryExpectingExitCode(t, 0, binaryPath, "-c", configPath)
+	assertActionCount(t, actionMarker, 1)
+}
+
+// Setting privatecert_path without a key_secret cannot work, so the tool must
+// refuse to start rather than fail against the server.
+
+// Setting privatecert_path without a key_secret cannot work, so the tool must
+// refuse to start rather than fail against the server.
+func TestCLI_RejectsPrivateCertPathWithoutKeySecret(t *testing.T) {
+	tmpDir := t.TempDir()
+	binaryPath := buildBinary(t)
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	writeFile(t, configPath, fmt.Sprintf(`base_url: "https://certwarden.example.com"
+certificates:
+  - name: "example.com"
+    cert_secret: "cert-secret"
+    cert_path: %q
+    privatecert_path: %q
+`, filepath.Join(tmpDir, "cert.pem"), filepath.Join(tmpDir, "app.pem")))
+
+	output := runBinaryExpectingExitCode(t, 1, binaryPath, "-c", configPath)
+
+	if !strings.Contains(output, "key_secret") {
+		t.Fatalf("expected validation error naming key_secret, got: %s", output)
+	}
+}
+
+// e2eBinaryBody is deliberately not valid UTF-8, mirroring a pkcs12 container.
+var e2eBinaryBody = []byte{0x30, 0x82, 0x00, 0xff, 0xfe, 0x00, 0x80, 0x81, 0x01, 0x00, 0xc3, 0x28}
+
+// The whole pipeline must carry binary through unharmed: the format is
+// requested as a query parameter, the body is never decoded as text, and the
+// file lands on disk byte for byte.
+func TestCLI_DeploysBinaryPrivateCertFormatByteExactly(t *testing.T) {
+	var gotFormat string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		name := path.Base(r.URL.Path)
+
+		if strings.HasPrefix(r.URL.Path, constants.PrivateCertApiPath) {
+			gotFormat = r.URL.Query().Get("format")
+			w.Header().Set("Content-Type", "application/octet-stream")
+			_, _ = w.Write(e2eBinaryBody)
+			return
+		}
+
+		switch {
+		case strings.HasPrefix(r.URL.Path, constants.CertificateApiPath):
+			_, _ = w.Write([]byte("cert-body-" + name))
+		case strings.HasPrefix(r.URL.Path, constants.KeyApiPath):
+			_, _ = w.Write([]byte("key-body-" + name))
+		case strings.HasPrefix(r.URL.Path, constants.CaCertificateApiPath):
+			_, _ = w.Write([]byte("ca-body-" + name))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	tmpDir := t.TempDir()
+	binaryPath := buildBinary(t)
+	keystorePath := filepath.Join(tmpDir, "certs", "keystore.p12")
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	writeFile(t, configPath, fmt.Sprintf(`base_url: %q
+certificates:
+  - name: "example.com"
+    cert_secret: "cert-secret"
+    cert_path: %q
+    key_secret: "key-secret"
+    privatecert_path: %q
+    privatecert_format: "pkcs12"
+`, server.URL, filepath.Join(tmpDir, "certs", "cert.pem"), keystorePath))
+
+	runBinaryExpectingExitCode(t, 0, binaryPath, "-c", configPath)
+
+	if gotFormat != "pkcs12" {
+		t.Fatalf("expected the server to be asked for format=pkcs12, got %q", gotFormat)
+	}
+
+	written, err := os.ReadFile(keystorePath)
+	if err != nil {
+		t.Fatalf("failed to read keystore: %v", err)
+	}
+
+	if !bytes.Equal(written, e2eBinaryBody) {
+		t.Fatalf("binary body was corrupted: got % x want % x", written, e2eBinaryBody)
+	}
+}
+
+func TestCLI_RejectsInvalidPrivateCertFormat(t *testing.T) {
+	tmpDir := t.TempDir()
+	binaryPath := buildBinary(t)
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	writeFile(t, configPath, fmt.Sprintf(`base_url: "https://certwarden.example.com"
+certificates:
+  - name: "example.com"
+    cert_secret: "cert-secret"
+    cert_path: %q
+    key_secret: "key-secret"
+    privatecert_path: %q
+    privatecert_format: "der"
+`, filepath.Join(tmpDir, "cert.pem"), filepath.Join(tmpDir, "app.pem")))
+
+	output := runBinaryExpectingExitCode(t, 1, binaryPath, "-c", configPath)
+
+	if !strings.Contains(output, "privatecert_format") {
+		t.Fatalf("expected validation error naming privatecert_format, got: %s", output)
+	}
+}
+
+// TestCLI_ResolvesSecretsFromEnvironmentAndFile is the end-to-end guard for #34
+// and #48: the config carries no literal key at all, only references.
+func TestCLI_ResolvesSecretsFromEnvironmentAndFile(t *testing.T) {
+	var gotCertKey, gotKeyKey string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, constants.CertificateApiPath):
+			gotCertKey = r.Header.Get(constants.ApiKeyHeaderName)
+			_, _ = w.Write([]byte("cert-body"))
+		case strings.HasPrefix(r.URL.Path, constants.KeyApiPath):
+			gotKeyKey = r.Header.Get(constants.ApiKeyHeaderName)
+			_, _ = w.Write([]byte("key-body"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	tmpDir := t.TempDir()
+	binaryPath := buildBinary(t)
+	credential := filepath.Join(tmpDir, "key-credential")
+	writeFile(t, credential, "file-key-secret\n")
+
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	writeFile(t, configPath, fmt.Sprintf(`base_url: %q
+default_cert_secret: "${CERTWARDEN_CERT_SECRET}"
+certificates:
+  - name: "example.com"
+    cert_path: %q
+    key_secret: "file:%s"
+    key_path: %q
+`, server.URL, filepath.Join(tmpDir, "cert.pem"), credential, filepath.Join(tmpDir, "key.pem")))
+
+	cmd := exec.Command(binaryPath, "-c", configPath)
+	cmd.Env = append(os.Environ(), "CERTWARDEN_CERT_SECRET=env-cert-secret")
+
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("expected a successful run: %v\n%s", err, string(output))
+	}
+
+	if gotCertKey != "env-cert-secret" {
+		t.Fatalf("expected the default from the environment to be used: got %q", gotCertKey)
+	}
+
+	if gotKeyKey != "file-key-secret" {
+		t.Fatalf("expected the trimmed file credential to be used: got %q", gotKeyKey)
+	}
+}
+
+// TestCLI_UnresolvableSecretFailsBeforeAnyRequest pins the #34 contract that a
+// broken reference stops the run before it touches the network.
+
+// TestCLI_UnresolvableSecretFailsBeforeAnyRequest pins the #34 contract that a
+// broken reference stops the run before it touches the network.
+func TestCLI_UnresolvableSecretFailsBeforeAnyRequest(t *testing.T) {
+	var requests int
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		_, _ = w.Write([]byte("cert-body"))
+	}))
+	defer server.Close()
+
+	tmpDir := t.TempDir()
+	binaryPath := buildBinary(t)
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	writeFile(t, configPath, fmt.Sprintf(`base_url: %q
+certificates:
+  - name: "example.com"
+    cert_secret: "${CERTWARDEN_DEFINITELY_UNSET_IN_E2E}"
+    cert_path: %q
+`, server.URL, filepath.Join(tmpDir, "cert.pem")))
+
+	output := runBinaryExpectingExitCode(t, 1, binaryPath, "-c", configPath)
+
+	if !strings.Contains(output, "CERTWARDEN_DEFINITELY_UNSET_IN_E2E") {
+		t.Fatalf("expected the error to name the unset variable, got: %s", output)
+	}
+
+	if requests != 0 {
+		t.Fatalf("expected no request to be made before validation failed, got %d", requests)
+	}
+}
+
+// TestCLI_BaseURLAndAPIKeyOverridesReachTheServer is the end-to-end guard for
+// #35. Both flags exist in the reference Python tool and neither of them works
+// there, so this asserts the whole path: the flag has to survive config loading
+// and actually change the request that goes out.
+func TestCLI_BaseURLAndAPIKeyOverridesReachTheServer(t *testing.T) {
+	var gotAPIKey string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAPIKey = r.Header.Get(constants.ApiKeyHeaderName)
+		_, _ = w.Write([]byte("cert-body"))
+	}))
+	defer server.Close()
+
+	tmpDir := t.TempDir()
+	binaryPath := buildBinary(t)
+	certPath := filepath.Join(tmpDir, "cert.pem")
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	// the config points somewhere that is not listening at all, so a passing
+	// test cannot be explained by the override being quietly ignored
+	writeFile(t, configPath, fmt.Sprintf(`base_url: "https://127.0.0.1:1"
+certificates:
+  - name: "example.com"
+    cert_secret: "config-secret"
+    cert_path: %q
+`, certPath))
+
+	runBinaryExpectingExitCode(t, 0, binaryPath,
+		"-c", configPath,
+		"--base-url", server.URL,
+		"--api-key", "flag-secret",
+	)
+
+	assertFileContents(t, certPath, "cert-body")
+
+	if gotAPIKey != "flag-secret" {
+		t.Fatalf("expected --api-key to reach the server: got %q", gotAPIKey)
+	}
+}
+
+// TestCLI_RejectsInvalidBaseURLOverride makes sure a bad --base-url is a config
+// error with exit code 1, not a request that fails in a confusing way later.
+
+// TestCLI_RejectsInvalidBaseURLOverride makes sure a bad --base-url is a config
+// error with exit code 1, not a request that fails in a confusing way later.
+func TestCLI_RejectsInvalidBaseURLOverride(t *testing.T) {
+	tmpDir := t.TempDir()
+	binaryPath := buildBinary(t)
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	writeFile(t, configPath, fmt.Sprintf(`base_url: "https://certwarden.example.com"
+certificates:
+  - name: "example.com"
+    cert_secret: "config-secret"
+    cert_path: %q
+`, filepath.Join(tmpDir, "cert.pem")))
+
+	output := runBinaryExpectingExitCode(t, 1, binaryPath, "-c", configPath, "--base-url", "not a url")
+
+	if !strings.Contains(output, "base_url") {
+		t.Fatalf("expected the error to name base_url, got: %s", output)
+	}
+}
+
+// TestCLI_ResolvesSecretsFromEnvironmentAndFile is the end-to-end guard for #34
+// and #48: the config carries no literal key at all, only references.
+
+// TestCLI_DeploysEveryCertificateOfAGroup is the end-to-end proof of #38: a
+// group whose paths, secrets and action are written exactly once deploys every
+// one of its members, and the per-certificate override still wins over the
+// group in a real run.
+func TestCLI_DeploysEveryCertificateOfAGroup(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case constants.CertificateApiPath + "a.example.com":
+			_, _ = w.Write([]byte("a-cert-body"))
+		case constants.KeyApiPath + "a.example.com":
+			_, _ = w.Write([]byte("a-key-body"))
+		case constants.CertificateApiPath + "b.example.com":
+			_, _ = w.Write([]byte("b-cert-body"))
+		case constants.KeyApiPath + "b.example.com":
+			_, _ = w.Write([]byte("b-key-body"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	tmpDir := t.TempDir()
+	binaryPath := buildBinary(t)
+
+	groupMarker := filepath.Join(tmpDir, "group-action.log")
+	groupScript := filepath.Join(tmpDir, "group-action.sh")
+	writeExecutableFile(t, groupScript, fmt.Sprintf("#!/bin/sh\nprintf 'run\\n' >> %q\n", groupMarker))
+
+	overrideMarker := filepath.Join(tmpDir, "override-action.log")
+	overrideScript := filepath.Join(tmpDir, "override-action.sh")
+	writeExecutableFile(t, overrideScript, fmt.Sprintf("#!/bin/sh\nprintf 'run\\n' >> %q\n", overrideMarker))
+
+	t.Setenv("E2E_GROUP_CERT_SECRET", "cert-secret")
+	t.Setenv("E2E_GROUP_KEY_SECRET", "key-secret")
+
+	sslDir := filepath.Join(tmpDir, "ssl")
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	// the whole point: the paths, the secrets and the action are written once
+	config := fmt.Sprintf(`base_url: %q
+groups:
+  nginx:
+    cert_secret: "${E2E_GROUP_CERT_SECRET}"
+    key_secret: "${E2E_GROUP_KEY_SECRET}"
+    cert_path: %q
+    key_path: %q
+    action: %q
+    run_on: "new_or_changed"
+    certificates:
+      - name: a.example.com
+      - name: b.example.com
+        action: %q
+`,
+		server.URL,
+		filepath.Join(sslDir, "{name}.crt"),
+		filepath.Join(sslDir, "{name}.key"),
+		groupScript,
+		overrideScript,
+	)
+	writeFile(t, configPath, config)
+
+	runBinary(t, binaryPath, "-c", configPath)
+
+	// {name} in the group paths resolved per certificate
+	assertFileContents(t, filepath.Join(sslDir, "a.example.com.crt"), "a-cert-body")
+	assertFileContents(t, filepath.Join(sslDir, "a.example.com.key"), "a-key-body")
+	assertFileContents(t, filepath.Join(sslDir, "b.example.com.crt"), "b-cert-body")
+	assertFileContents(t, filepath.Join(sslDir, "b.example.com.key"), "b-key-body")
+
+	// the group action fired for the member that inherited it, and only for it
+	assertActionCount(t, groupMarker, 1)
+	assertActionCount(t, overrideMarker, 1)
+
+	// run_on inherited from the group still holds on a second run
+	runBinary(t, binaryPath, "-c", configPath)
+	assertActionCount(t, groupMarker, 1)
+	assertActionCount(t, overrideMarker, 1)
+}
+
+// TestCLI_RejectsDuplicateNameAcrossGroupAndFlatList makes sure the config is
+// rejected before the first request goes out, and that the message says where
+// to look.
+func TestCLI_RejectsDuplicateNameAcrossGroupAndFlatList(t *testing.T) {
+	tmpDir := t.TempDir()
+	binaryPath := buildBinary(t)
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	writeFile(t, configPath, `base_url: "https://certwarden.example.invalid"
+groups:
+  nginx:
+    cert_secret: "secret"
+    cert_path: "/tmp/{name}.crt"
+    certificates:
+      - name: clash.example.com
+certificates:
+  - name: clash.example.com
+    cert_secret: "secret"
+    cert_path: "/tmp/clash.crt"
+`)
+
+	output := runBinaryExpectingExitCode(t, 1, binaryPath, "-c", configPath)
+
+	if !strings.Contains(output, "is not unique") {
+		t.Fatalf("expected the duplicate name to be reported, got %s", output)
 	}
 }
