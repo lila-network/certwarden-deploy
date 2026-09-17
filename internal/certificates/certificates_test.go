@@ -1,13 +1,19 @@
 package certificates
 
 import (
+	"bytes"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/lila-network/certwarden-deploy/internal/configuration"
 	"github.com/lila-network/certwarden-deploy/internal/constants"
@@ -17,7 +23,38 @@ func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-func TestWriteToDiskCreatesParentDirectories(t *testing.T) {
+// capturingLogger returns a logger that writes every level down to Debug into buf.
+func capturingLogger(buf *bytes.Buffer) *slog.Logger {
+	return slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+}
+
+// writeActionScript writes an executable /bin/sh script and returns its path.
+func writeActionScript(t *testing.T, body string) string {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "action.sh")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+body), 0755); err != nil {
+		t.Fatalf("failed to write action script: %v", err)
+	}
+
+	return path
+}
+
+// findLogLine returns the first logged line containing substr.
+func findLogLine(t *testing.T, logs string, substr string) string {
+	t.Helper()
+
+	for _, line := range strings.Split(logs, "\n") {
+		if strings.Contains(line, substr) {
+			return line
+		}
+	}
+
+	t.Fatalf("no log line containing %q found in:\n%s", substr, logs)
+	return ""
+}
+
+func TestWriteTempFileCreatesParentDirectories(t *testing.T) {
 	t.Cleanup(func() {
 		configuration.DryRun = false
 	})
@@ -29,8 +66,12 @@ func TestWriteToDiskCreatesParentDirectories(t *testing.T) {
 		serverBytes: []byte("certificate-data"),
 	}
 
-	if err := cert.writeToDisk(testLogger()); err != nil {
-		t.Fatalf("writeToDisk returned error: %v", err)
+	if err := cert.writeTempFile(testLogger()); err != nil {
+		t.Fatalf("writeTempFile returned error: %v", err)
+	}
+
+	if err := cert.Commit(testLogger()); err != nil {
+		t.Fatalf("Commit returned error: %v", err)
 	}
 
 	data, err := os.ReadFile(target)
@@ -43,7 +84,7 @@ func TestWriteToDiskCreatesParentDirectories(t *testing.T) {
 	}
 }
 
-func TestWriteToDiskPreservesExistingPermissions(t *testing.T) {
+func TestWriteTempFilePreservesExistingPermissions(t *testing.T) {
 	t.Cleanup(func() {
 		configuration.DryRun = false
 	})
@@ -59,8 +100,12 @@ func TestWriteToDiskPreservesExistingPermissions(t *testing.T) {
 		serverBytes: []byte("new-data"),
 	}
 
-	if err := cert.writeToDisk(testLogger()); err != nil {
-		t.Fatalf("writeToDisk returned error: %v", err)
+	if err := cert.writeTempFile(testLogger()); err != nil {
+		t.Fatalf("writeTempFile returned error: %v", err)
+	}
+
+	if err := cert.Commit(testLogger()); err != nil {
+		t.Fatalf("Commit returned error: %v", err)
 	}
 
 	info, err := os.Stat(target)
@@ -123,7 +168,7 @@ func TestHandleCertificateActionIgnoresWhitespaceAndRunsCommand(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "action-ran")
 	action := "   /usr/bin/touch   " + target + "   "
 
-	if err := handleCertificateAction(action); err != nil {
+	if err := handleCertificateAction(testLogger(), configuration.ShellAction(action)); err != nil {
 		t.Fatalf("handleCertificateAction returned error: %v", err)
 	}
 
@@ -133,7 +178,2406 @@ func TestHandleCertificateActionIgnoresWhitespaceAndRunsCommand(t *testing.T) {
 }
 
 func TestHandleCertificateActionWhitespaceOnlyIsNoop(t *testing.T) {
-	if err := handleCertificateAction("   "); err != nil {
+	if err := handleCertificateAction(testLogger(), configuration.ShellAction("   ")); err != nil {
 		t.Fatalf("expected whitespace-only action to be ignored, got error: %v", err)
+	}
+}
+
+func TestRunResultExitCodePrecedence(t *testing.T) {
+	certErr := errors.New("cert boom")
+	actionErr := errors.New("action boom")
+
+	tests := []struct {
+		name   string
+		result RunResult
+		want   int
+	}{
+		{
+			name:   "empty run succeeds",
+			result: RunResult{},
+			want:   ExitSuccess,
+		},
+		{
+			name: "only successes",
+			result: RunResult{
+				Changed:   []string{"example.com"},
+				Unchanged: []string{"example.org"},
+			},
+			want: ExitSuccess,
+		},
+		{
+			name: "certificate failure",
+			result: RunResult{
+				Changed: []string{"example.com"},
+				Failed:  []CertFailure{{Name: "example.org", Type: KeyFile, Err: certErr}},
+			},
+			want: ExitCertificateFailure,
+		},
+		{
+			name: "action failure only",
+			result: RunResult{
+				Changed:      []string{"example.com"},
+				ActionFailed: []ActionFailure{{Name: "example.com", Err: actionErr}},
+			},
+			want: ExitActionFailure,
+		},
+		{
+			name: "certificate failure outranks action failure",
+			result: RunResult{
+				Failed:       []CertFailure{{Name: "example.org", Type: CertificateFile, Err: certErr}},
+				ActionFailed: []ActionFailure{{Name: "example.com", Err: actionErr}},
+			},
+			want: ExitCertificateFailure,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.result.ExitCode(); got != tc.want {
+				t.Fatalf("unexpected exit code: got %d want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestHandleCertificatesRecordsFailuresAndContinues(t *testing.T) {
+	t.Cleanup(func() {
+		configuration.DryRun = false
+		configuration.Force = false
+	})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "broken.example.com") {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_, _ = w.Write([]byte("body-" + filepath.Base(r.URL.Path)))
+	}))
+	defer server.Close()
+
+	tmpDir := t.TempDir()
+	config := &configuration.ConfigFileData{
+		BaseURL: server.URL,
+		Certificates: []configuration.CertificateData{
+			{
+				Name:              "broken.example.com",
+				CertificateSecret: "secret",
+				CertificatePath:   filepath.Join(tmpDir, "broken-cert.pem"),
+			},
+			{
+				Name:              "good.example.com",
+				CertificateSecret: "secret",
+				CertificatePath:   filepath.Join(tmpDir, "good-cert.pem"),
+			},
+		},
+	}
+
+	result := HandleCertificates(testLogger(), config)
+
+	if len(result.Failed) != 1 {
+		t.Fatalf("unexpected failure count: got %d want 1 (%v)", len(result.Failed), result.Failed)
+	}
+
+	if result.Failed[0].Name != "broken.example.com" {
+		t.Fatalf("unexpected failed certificate name: got %q", result.Failed[0].Name)
+	}
+
+	if result.Failed[0].Type != CertificateFile {
+		t.Fatalf("unexpected failed file type: got %v", result.Failed[0].Type)
+	}
+
+	if result.Failed[0].Err == nil {
+		t.Fatal("expected failure to carry an error")
+	}
+
+	// The broken certificate must not stop the healthy one behind it.
+	if len(result.New) != 1 || result.New[0] != "good.example.com" {
+		t.Fatalf("unexpected new certificates: got %v", result.New)
+	}
+
+	if len(result.Changed) != 0 {
+		t.Fatalf("a first deployment must not be reported as changed: got %v", result.Changed)
+	}
+
+	if result.ExitCode() != ExitCertificateFailure {
+		t.Fatalf("unexpected exit code: got %d want %d", result.ExitCode(), ExitCertificateFailure)
+	}
+
+	assertFileExists(t, config.Certificates[1].CertificatePath)
+}
+
+func TestHandleCertificatesReportsUnchangedOnSecondRun(t *testing.T) {
+	t.Cleanup(func() {
+		configuration.DryRun = false
+		configuration.Force = false
+	})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("stable-body"))
+	}))
+	defer server.Close()
+
+	config := &configuration.ConfigFileData{
+		BaseURL: server.URL,
+		Certificates: []configuration.CertificateData{
+			{
+				Name:              "example.com",
+				CertificateSecret: "secret",
+				CertificatePath:   filepath.Join(t.TempDir(), "cert.pem"),
+			},
+		},
+	}
+
+	first := HandleCertificates(testLogger(), config)
+	if len(first.New) != 1 || first.New[0] != "example.com" {
+		t.Fatalf("expected certificate to be reported as new: got %v", first.New)
+	}
+
+	second := HandleCertificates(testLogger(), config)
+	if len(second.Unchanged) != 1 || second.Unchanged[0] != "example.com" {
+		t.Fatalf("expected certificate to be reported as unchanged: got %v", second.Unchanged)
+	}
+
+	if second.ExitCode() != ExitSuccess {
+		t.Fatalf("unexpected exit code: got %d want %d", second.ExitCode(), ExitSuccess)
+	}
+}
+
+func assertFileExists(t *testing.T, path string) {
+	t.Helper()
+
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("expected file %s to exist: %v", path, err)
+	}
+}
+
+func TestHandleCertificateActionLogsStderrAndExitCodeOnFailure(t *testing.T) {
+	script := writeActionScript(t, "echo boom >&2\nexit 3\n")
+
+	var buf bytes.Buffer
+	if err := handleCertificateAction(capturingLogger(&buf), configuration.ShellAction(script)); err == nil {
+		t.Fatal("expected error for failing action")
+	}
+
+	logs := buf.String()
+
+	stderrLine := findLogLine(t, logs, "stderr=boom")
+	if !strings.Contains(stderrLine, "level=ERROR") {
+		t.Fatalf("expected stderr to be logged at ERROR, got: %s", stderrLine)
+	}
+
+	failureLine := findLogLine(t, logs, "Post-rollout action failed")
+	if !strings.Contains(failureLine, "exit-code=3") {
+		t.Fatalf("expected exit-code field on failure, got: %s", failureLine)
+	}
+	if !strings.Contains(failureLine, "level=ERROR") {
+		t.Fatalf("expected failure to be logged at ERROR, got: %s", failureLine)
+	}
+
+	if !strings.Contains(logs, "Executing post-rollout action") {
+		t.Fatalf("expected the command to be logged before running, got:\n%s", logs)
+	}
+}
+
+func TestHandleCertificateActionLogsStdoutAtDebugOnSuccess(t *testing.T) {
+	script := writeActionScript(t, "echo reloaded\n")
+
+	var buf bytes.Buffer
+	if err := handleCertificateAction(capturingLogger(&buf), configuration.ShellAction(script)); err != nil {
+		t.Fatalf("handleCertificateAction returned error: %v", err)
+	}
+
+	logs := buf.String()
+
+	stdoutLine := findLogLine(t, logs, "stdout=reloaded")
+	if !strings.Contains(stdoutLine, "level=DEBUG") {
+		t.Fatalf("expected stdout to be logged at DEBUG, got: %s", stdoutLine)
+	}
+
+	if strings.Contains(logs, "level=ERROR") {
+		t.Fatalf("expected no error logs for a successful action, got:\n%s", logs)
+	}
+}
+
+func TestHandleCertificateActionLogsStderrOnSuccess(t *testing.T) {
+	script := writeActionScript(t, "echo warning >&2\n")
+
+	var buf bytes.Buffer
+	if err := handleCertificateAction(capturingLogger(&buf), configuration.ShellAction(script)); err != nil {
+		t.Fatalf("handleCertificateAction returned error: %v", err)
+	}
+
+	stderrLine := findLogLine(t, buf.String(), "stderr=warning")
+	if !strings.Contains(stderrLine, "level=ERROR") {
+		t.Fatalf("expected stderr on exit 0 to be logged at ERROR, got: %s", stderrLine)
+	}
+}
+
+func TestHandleCertificateActionTruncatesOutputAtCap(t *testing.T) {
+	payload := filepath.Join(t.TempDir(), "payload")
+	if err := os.WriteFile(payload, bytes.Repeat([]byte("a"), maxActionOutputBytes+4096), 0644); err != nil {
+		t.Fatalf("failed to write payload: %v", err)
+	}
+
+	script := writeActionScript(t, "cat "+payload+" >&2\nexit 1\n")
+
+	var buf bytes.Buffer
+	if err := handleCertificateAction(capturingLogger(&buf), configuration.ShellAction(script)); err == nil {
+		t.Fatal("expected error for failing action")
+	}
+
+	logs := buf.String()
+	if !strings.Contains(logs, actionOutputTruncationMarker) {
+		t.Fatal("expected captured stderr to be marked as truncated")
+	}
+
+	// the payload is the only long run of "a" in the logs, so the longest run is what got captured
+	longestRun, currentRun := 0, 0
+	for _, r := range logs {
+		if r == 'a' {
+			currentRun++
+			if currentRun > longestRun {
+				longestRun = currentRun
+			}
+			continue
+		}
+		currentRun = 0
+	}
+
+	if longestRun != maxActionOutputBytes {
+		t.Fatalf("unexpected amount of captured stderr: got %d bytes want %d", longestRun, maxActionOutputBytes)
+	}
+}
+
+func TestBoundedBufferStopsAtLimit(t *testing.T) {
+	b := &boundedBuffer{limit: 4}
+
+	n, err := b.Write([]byte("abc"))
+	if err != nil || n != 3 {
+		t.Fatalf("unexpected write result: n=%d err=%v", n, err)
+	}
+
+	// second write crosses the limit and must be reported as fully written
+	n, err = b.Write([]byte("defg"))
+	if err != nil || n != 4 {
+		t.Fatalf("unexpected write result: n=%d err=%v", n, err)
+	}
+
+	// a write beyond the limit is dropped entirely
+	if _, err := b.Write([]byte("hij")); err != nil {
+		t.Fatalf("unexpected write error: %v", err)
+	}
+
+	if got, want := b.String(), "abcd"+actionOutputTruncationMarker; got != want {
+		t.Fatalf("unexpected buffer contents: got %q want %q", got, want)
+	}
+}
+
+func TestFetchFromServerSurfacesErrorBodyOnNonSuccess(t *testing.T) {
+	var logs bytes.Buffer
+	logger := capturingLogger(&logs)
+	const responseBody = `{"error":"certificate not found: no such certificate name"}`
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(responseBody))
+	}))
+	defer server.Close()
+
+	cert := GenericCertificate{Name: "example.com", Type: CertificateFile}
+
+	err := cert.fetchFromServer(logger, server.URL, false)
+	if err == nil {
+		t.Fatal("expected error for 404 response")
+	}
+
+	if !strings.Contains(err.Error(), "certificate not found: no such certificate name") {
+		t.Fatalf("expected server body in returned error, got %q", err.Error())
+	}
+
+	if !strings.Contains(logs.String(), "certificate not found: no such certificate name") {
+		t.Fatalf("expected server body in log output, got %q", logs.String())
+	}
+}
+
+func TestFetchFromServerSurfacesErrorBodyOnUnauthorized(t *testing.T) {
+	var logs bytes.Buffer
+	logger := capturingLogger(&logs)
+	const responseBody = `{"error":"api key is expired"}`
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(responseBody))
+	}))
+	defer server.Close()
+
+	cert := GenericCertificate{Name: "example.com", Type: KeyFile}
+
+	err := cert.fetchFromServer(logger, server.URL, false)
+	if err == nil {
+		t.Fatal("expected error for 401 response")
+	}
+
+	if !strings.Contains(err.Error(), "api key is expired") {
+		t.Fatalf("expected server body in returned error, got %q", err.Error())
+	}
+
+	if !strings.Contains(logs.String(), "api key is expired") {
+		t.Fatalf("expected server body in log output, got %q", logs.String())
+	}
+}
+
+// TestFetchFromServerNeverLogsSuccessBody guards the security property that key
+// material returned on a success response is never written to the log.
+func TestFetchFromServerNeverLogsSuccessBody(t *testing.T) {
+	var logs bytes.Buffer
+	logger := capturingLogger(&logs)
+	const privateKey = "-----BEGIN PRIVATE KEY-----\n" +
+		"MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQSUPERSECRETKEY\n" +
+		"MATERIALMUSTNEVERAPPEARINTHEJOURNALZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ\n" +
+		"-----END PRIVATE KEY-----\n"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = w.Write([]byte(privateKey))
+	}))
+	defer server.Close()
+
+	cert := GenericCertificate{Name: "example.com", Type: KeyFile}
+
+	if err := cert.fetchFromServer(logger, server.URL, false); err != nil {
+		t.Fatalf("fetchFromServer returned error: %v", err)
+	}
+
+	if string(cert.serverBytes) != privateKey {
+		t.Fatalf("unexpected response body: got %q", string(cert.serverBytes))
+	}
+
+	for _, secret := range []string{
+		"SUPERSECRETKEY",
+		"MATERIALMUSTNEVERAPPEARINTHEJOURNAL",
+		"BEGIN PRIVATE KEY",
+	} {
+		if strings.Contains(logs.String(), secret) {
+			t.Fatalf("success response body leaked into log output: %q", logs.String())
+		}
+	}
+}
+
+// TestFetchFromServerNeverLogsTheSecret is the counterpart to
+// TestFetchFromServerNeverLogsSuccessBody: that one guards the key material
+// coming back from the server, this one guards the API key going out to it.
+//
+// The 401 path is covered on purpose. It is the one place where logging the
+// rejected key looks helpful, and it is exactly where a leak would be worst: an
+// invalid key is still a valid secret.
+func TestFetchFromServerNeverLogsTheSecret(t *testing.T) {
+	const secret = "APIKEYMUSTNEVERAPPEARINTHEJOURNALZZZ"
+
+	tests := []struct {
+		name    string
+		handler http.HandlerFunc
+	}{
+		{
+			name: "success",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte("server-bytes"))
+			},
+		},
+		{
+			name: "unauthorized",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = w.Write([]byte(`{"error":"api key is invalid"}`))
+			},
+		},
+		{
+			name: "server error",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusInternalServerError)
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(tc.handler)
+			defer server.Close()
+
+			var logs bytes.Buffer
+			cert := GenericCertificate{Name: "example.com", Secret: secret, Type: KeyFile}
+
+			// the error is deliberately ignored, what is on trial here is the log
+			_ = cert.fetchFromServer(capturingLogger(&logs), server.URL, false)
+
+			if strings.Contains(logs.String(), secret) {
+				t.Fatalf("api key leaked into log output: %q", logs.String())
+			}
+		})
+	}
+}
+
+func TestFetchFromServerOmitsNonTextualErrorBody(t *testing.T) {
+	var logs bytes.Buffer
+	logger := capturingLogger(&logs)
+	const responseBody = "binary-blob-should-not-be-logged"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(responseBody))
+	}))
+	defer server.Close()
+
+	cert := GenericCertificate{Name: "example.com", Type: CertificateFile}
+
+	err := cert.fetchFromServer(logger, server.URL, false)
+	if err == nil {
+		t.Fatal("expected error for 500 response")
+	}
+
+	if strings.Contains(err.Error(), responseBody) {
+		t.Fatalf("expected non-textual body to be omitted from error, got %q", err.Error())
+	}
+
+	if strings.Contains(logs.String(), responseBody) {
+		t.Fatalf("expected non-textual body to be omitted from log output, got %q", logs.String())
+	}
+
+	if strings.Contains(logs.String(), "response-body") {
+		t.Fatalf("expected response-body field to be omitted entirely, got %q", logs.String())
+	}
+}
+
+func TestFetchFromServerTruncatesLargeErrorBody(t *testing.T) {
+	var logs bytes.Buffer
+	logger := capturingLogger(&logs)
+	responseBody := strings.Repeat("A", maxLoggedBodyBytes+1000)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(responseBody))
+	}))
+	defer server.Close()
+
+	cert := GenericCertificate{Name: "example.com", Type: CertificateFile}
+
+	err := cert.fetchFromServer(logger, server.URL, false)
+	if err == nil {
+		t.Fatal("expected error for 500 response")
+	}
+
+	if !strings.Contains(err.Error(), strings.Repeat("A", maxLoggedBodyBytes)) {
+		t.Fatalf("expected body prefix up to the cap in error, got %q", err.Error())
+	}
+
+	if strings.Contains(err.Error(), strings.Repeat("A", maxLoggedBodyBytes+1)) {
+		t.Fatal("expected body to be truncated at the cap")
+	}
+
+	if !strings.Contains(err.Error(), "[truncated]") {
+		t.Fatalf("expected truncation marker in error, got %q", err.Error())
+	}
+
+	if !strings.Contains(logs.String(), "[truncated]") {
+		t.Fatalf("expected truncation marker in log output, got %q", logs.String())
+	}
+}
+
+// TestErrorBodyForLogCollapsesWhitespace ensures a multi-line upstream error
+// cannot break the log record across several lines.
+func TestErrorBodyForLogCollapsesWhitespace(t *testing.T) {
+	var logs bytes.Buffer
+	logger := capturingLogger(&logs)
+	const responseBody = "certificate is not\n\tyet issued\r\n\nretry later\n"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(responseBody))
+	}))
+	defer server.Close()
+
+	cert := GenericCertificate{Name: "example.com", Type: CertificateFile}
+
+	err := cert.fetchFromServer(logger, server.URL, false)
+	if err == nil {
+		t.Fatal("expected error for 409 response")
+	}
+
+	if !strings.Contains(err.Error(), "certificate is not yet issued retry later") {
+		t.Fatalf("expected collapsed body in error, got %q", err.Error())
+	}
+
+	// the whole body must sit on the single log record line, not spill over it
+	var record string
+	for _, line := range strings.Split(logs.String(), "\n") {
+		if strings.Contains(line, "failed to get data from server") {
+			record = line
+			break
+		}
+	}
+
+	if record == "" {
+		t.Fatalf("expected an error log record, got %q", logs.String())
+	}
+
+	if !strings.Contains(record, "certificate is not yet issued retry later") {
+		t.Fatalf("expected collapsed body on a single log record line, got %q", record)
+	}
+}
+
+// startArtefactServer serves one body per artefact type. A type missing from
+// bodies is answered with 500, which is how a mid-sequence fetch failure is
+// injected into an otherwise healthy certificate.
+func startArtefactServer(t *testing.T, bodies map[FileType]string) *httptest.Server {
+	t.Helper()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var fileType FileType
+
+		switch {
+		case strings.HasPrefix(r.URL.Path, constants.CertificateApiPath):
+			fileType = CertificateFile
+		case strings.HasPrefix(r.URL.Path, constants.KeyApiPath):
+			fileType = KeyFile
+		case strings.HasPrefix(r.URL.Path, constants.CaCertificateApiPath):
+			fileType = CaCertificateFile
+		default:
+			http.NotFound(w, r)
+			return
+		}
+
+		body, ok := bodies[fileType]
+		if !ok {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(server.Close)
+
+	return server
+}
+
+// seedFile writes a file that is already on disk when the run starts.
+func seedFile(t *testing.T, path string, content string, mode os.FileMode) {
+	t.Helper()
+
+	if err := os.WriteFile(path, []byte(content), mode); err != nil {
+		t.Fatalf("failed to seed file %s: %v", path, err)
+	}
+
+	// WriteFile honours the umask, so force the mode we asked for
+	if err := os.Chmod(path, mode); err != nil {
+		t.Fatalf("failed to chmod seeded file %s: %v", path, err)
+	}
+}
+
+// assertFileContents compares a file byte for byte, which is the whole point of
+// the #28 guards: "the file is still there" is not good enough, it has to be
+// the same bytes as before the failed run.
+func assertFileContents(t *testing.T, path string, want string) {
+	t.Helper()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("failed to read file %s: %v", path, err)
+	}
+
+	if string(data) != want {
+		t.Fatalf("unexpected contents of %s: got %q want %q", path, string(data), want)
+	}
+}
+
+// assertNoTempFiles fails if an aborted rollout left staged files behind.
+func assertNoTempFiles(t *testing.T, dir string) {
+	t.Helper()
+
+	leftovers, err := filepath.Glob(filepath.Join(dir, tempFilePattern))
+	if err != nil {
+		t.Fatalf("failed to glob for temporary files: %v", err)
+	}
+
+	if len(leftovers) != 0 {
+		t.Fatalf("temporary files left behind in %s: %v", dir, leftovers)
+	}
+}
+
+// assertSingleFailure checks that exactly one artefact of one certificate was
+// recorded as failed, and that the run reports the certificate failure exit code.
+func assertSingleFailure(t *testing.T, result RunResult, name string, fileType FileType) {
+	t.Helper()
+
+	if len(result.Failed) != 1 {
+		t.Fatalf("unexpected failure count: got %d want 1 (%v)", len(result.Failed), result.Failed)
+	}
+
+	if result.Failed[0].Name != name {
+		t.Fatalf("unexpected failed certificate name: got %q want %q", result.Failed[0].Name, name)
+	}
+
+	if result.Failed[0].Type != fileType {
+		t.Fatalf("unexpected failed file type: got %v want %v", result.Failed[0].Type, fileType)
+	}
+
+	if result.Failed[0].Err == nil {
+		t.Fatal("expected failure to carry an error")
+	}
+
+	if result.ExitCode() != ExitCertificateFailure {
+		t.Fatalf("unexpected exit code: got %d want %d", result.ExitCode(), ExitCertificateFailure)
+	}
+}
+
+// certConfig builds a config for a single certificate whose artefacts live in dir.
+func certConfig(baseURL string, dir string, name string) *configuration.ConfigFileData {
+	return &configuration.ConfigFileData{
+		BaseURL: baseURL,
+		Certificates: []configuration.CertificateData{
+			{
+				Name:              name,
+				CertificateSecret: "cert-secret",
+				CertificatePath:   filepath.Join(dir, "cert.pem"),
+				KeySecret:         "key-secret",
+				KeyPath:           filepath.Join(dir, "key.pem"),
+				CaPath:            filepath.Join(dir, "ca.pem"),
+			},
+		},
+	}
+}
+
+// TestHandleCertificatesKeepsOldCertificateWhenKeyFetchFails is the regression
+// guard for #28.
+//
+// A certificate and its key only work as a pair. Rolling the certificate out on
+// its own and then failing on the key used to leave the new certificate next to
+// the old, non-matching key: nothing broke during that run, because nothing
+// reloaded, but the next unrelated restart of the TLS server hours or days
+// later picked up the mismatched pair and fell over.
+//
+// So when the key cannot be fetched, the certificate on disk must still be the
+// old one, byte for byte.
+func TestHandleCertificatesKeepsOldCertificateWhenKeyFetchFails(t *testing.T) {
+	t.Cleanup(func() {
+		configuration.DryRun = false
+		configuration.Force = false
+	})
+
+	const oldCert = "old-cert-body"
+	const oldKey = "old-key-body-matching-old-cert"
+
+	// the key is missing from the served artefacts, so it answers 500
+	server := startArtefactServer(t, map[FileType]string{
+		CertificateFile:   "new-cert-body",
+		CaCertificateFile: "new-ca-body",
+	})
+
+	dir := t.TempDir()
+	config := certConfig(server.URL, dir, "example.com")
+	certPath := config.Certificates[0].CertificatePath
+	keyPath := config.Certificates[0].KeyPath
+
+	seedFile(t, certPath, oldCert, 0644)
+	seedFile(t, keyPath, oldKey, 0600)
+
+	result := HandleCertificates(testLogger(), config)
+
+	// the actual point of #28: the pair on disk is still the matching old one
+	assertFileContents(t, certPath, oldCert)
+	assertFileContents(t, keyPath, oldKey)
+
+	if _, err := os.Stat(config.Certificates[0].CaPath); !os.IsNotExist(err) {
+		t.Fatalf("expected CA to not be deployed either, got err=%v", err)
+	}
+
+	assertSingleFailure(t, result, "example.com", KeyFile)
+	assertNoTempFiles(t, dir)
+
+	if len(result.Changed) != 0 {
+		t.Fatalf("expected no certificate to be reported as changed: got %v", result.Changed)
+	}
+}
+
+// TestHandleCertificatesKeepsOldCertificateAndKeyWhenCaFetchFails generalises
+// the guard above to a failure in the last artefact: the two that were fetched
+// successfully before it must not be published either.
+func TestHandleCertificatesKeepsOldCertificateAndKeyWhenCaFetchFails(t *testing.T) {
+	t.Cleanup(func() {
+		configuration.DryRun = false
+		configuration.Force = false
+	})
+
+	const oldCert = "old-cert-body"
+	const oldKey = "old-key-body"
+	const oldCa = "old-ca-body"
+
+	server := startArtefactServer(t, map[FileType]string{
+		CertificateFile: "new-cert-body",
+		KeyFile:         "new-key-body",
+	})
+
+	dir := t.TempDir()
+	config := certConfig(server.URL, dir, "example.com")
+
+	seedFile(t, config.Certificates[0].CertificatePath, oldCert, 0644)
+	seedFile(t, config.Certificates[0].KeyPath, oldKey, 0600)
+	seedFile(t, config.Certificates[0].CaPath, oldCa, 0644)
+
+	result := HandleCertificates(testLogger(), config)
+
+	assertFileContents(t, config.Certificates[0].CertificatePath, oldCert)
+	assertFileContents(t, config.Certificates[0].KeyPath, oldKey)
+	assertFileContents(t, config.Certificates[0].CaPath, oldCa)
+
+	assertSingleFailure(t, result, "example.com", CaCertificateFile)
+	assertNoTempFiles(t, dir)
+}
+
+// TestHandleCertificatesLeavesNoTemporaryFilesOnAbort makes sure an aborted
+// rollout cleans up after itself: the certificate and CA were fully staged
+// before the key failed, and both staged files have to be gone afterwards.
+func TestHandleCertificatesLeavesNoTemporaryFilesOnAbort(t *testing.T) {
+	t.Cleanup(func() {
+		configuration.DryRun = false
+		configuration.Force = false
+	})
+
+	server := startArtefactServer(t, map[FileType]string{
+		CertificateFile:   "new-cert-body",
+		CaCertificateFile: "new-ca-body",
+	})
+
+	dir := t.TempDir()
+	config := certConfig(server.URL, dir, "example.com")
+
+	result := HandleCertificates(testLogger(), config)
+
+	assertSingleFailure(t, result, "example.com", KeyFile)
+	assertNoTempFiles(t, dir)
+
+	// nothing at all was published for this certificate
+	for _, path := range []string{
+		config.Certificates[0].CertificatePath,
+		config.Certificates[0].KeyPath,
+		config.Certificates[0].CaPath,
+	} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("expected %s to be absent after an aborted rollout, got err=%v", path, err)
+		}
+	}
+}
+
+// TestHandleCertificatesFailedCertificateDoesNotBlockNextOne pins the "record,
+// do not abort" behaviour to the two-phase rollout: a certificate that aborts
+// must not keep the next one from being committed.
+func TestHandleCertificatesFailedCertificateDoesNotBlockNextOne(t *testing.T) {
+	t.Cleanup(func() {
+		configuration.DryRun = false
+		configuration.Force = false
+	})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "broken.example.com") && strings.HasPrefix(r.URL.Path, constants.KeyApiPath) {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		_, _ = w.Write([]byte("body-" + filepath.Base(r.URL.Path)))
+	}))
+	defer server.Close()
+
+	brokenDir := t.TempDir()
+	healthyDir := t.TempDir()
+
+	broken := certConfig(server.URL, brokenDir, "broken.example.com")
+	healthy := certConfig(server.URL, healthyDir, "healthy.example.com")
+	config := &configuration.ConfigFileData{
+		BaseURL:      server.URL,
+		Certificates: []configuration.CertificateData{broken.Certificates[0], healthy.Certificates[0]},
+	}
+
+	result := HandleCertificates(testLogger(), config)
+
+	assertSingleFailure(t, result, "broken.example.com", KeyFile)
+	assertNoTempFiles(t, brokenDir)
+	assertNoTempFiles(t, healthyDir)
+
+	// every artefact of the healthy certificate is a first deployment, so it is
+	// reported as new rather than changed (#31)
+	if len(result.New) != 1 || result.New[0] != "healthy.example.com" {
+		t.Fatalf("unexpected new certificates: got %v", result.New)
+	}
+
+	if len(result.Changed) != 0 {
+		t.Fatalf("unexpected changed certificates: got %v", result.Changed)
+	}
+
+	assertFileContents(t, healthy.Certificates[0].CertificatePath, "body-healthy.example.com")
+	assertFileContents(t, healthy.Certificates[0].KeyPath, "body-healthy.example.com")
+	assertFileContents(t, healthy.Certificates[0].CaPath, "body-healthy.example.com")
+}
+
+// TestHandleCertificatesDryRunStagesNothing checks that a dry run prepares and
+// reports the rollout without touching the disk, and without leaving staged
+// files behind.
+func TestHandleCertificatesDryRunStagesNothing(t *testing.T) {
+	t.Cleanup(func() {
+		configuration.DryRun = false
+		configuration.Force = false
+	})
+	configuration.DryRun = true
+
+	const oldCert = "old-cert-body"
+
+	server := startArtefactServer(t, map[FileType]string{
+		CertificateFile:   "new-cert-body",
+		KeyFile:           "new-key-body",
+		CaCertificateFile: "new-ca-body",
+	})
+
+	dir := t.TempDir()
+	config := certConfig(server.URL, dir, "example.com")
+	seedFile(t, config.Certificates[0].CertificatePath, oldCert, 0644)
+
+	result := HandleCertificates(testLogger(), config)
+
+	assertFileContents(t, config.Certificates[0].CertificatePath, oldCert)
+	assertNoTempFiles(t, dir)
+
+	for _, path := range []string{config.Certificates[0].KeyPath, config.Certificates[0].CaPath} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("expected %s to be absent after a dry run, got err=%v", path, err)
+		}
+	}
+
+	// a dry run still reports what it would have done. The certificate exists
+	// with different content but the key and CA do not exist at all, and a
+	// created artefact wins over a modified one, so the certificate is new (#31).
+	if len(result.New) != 1 || result.New[0] != "example.com" {
+		t.Fatalf("expected the dry run to report the certificate as new: got %v", result.New)
+	}
+
+	if len(result.Changed) != 0 {
+		t.Fatalf("expected nothing to be reported as changed: got %v", result.Changed)
+	}
+
+	if result.ExitCode() != ExitSuccess {
+		t.Fatalf("unexpected exit code: got %d want %d", result.ExitCode(), ExitSuccess)
+	}
+}
+
+// TestHandleCertificatesForceDeploysUnchangedCertificate checks that --force
+// still commits identical content and still triggers the action.
+func TestHandleCertificatesForceDeploysUnchangedCertificate(t *testing.T) {
+	t.Cleanup(func() {
+		configuration.DryRun = false
+		configuration.Force = false
+	})
+
+	bodies := map[FileType]string{
+		CertificateFile:   "stable-cert-body",
+		KeyFile:           "stable-key-body",
+		CaCertificateFile: "stable-ca-body",
+	}
+	server := startArtefactServer(t, bodies)
+
+	dir := t.TempDir()
+	config := certConfig(server.URL, dir, "example.com")
+
+	// seed exactly what the server serves, so nothing needs a rollout
+	seedFile(t, config.Certificates[0].CertificatePath, bodies[CertificateFile], 0644)
+	seedFile(t, config.Certificates[0].KeyPath, bodies[KeyFile], 0600)
+	seedFile(t, config.Certificates[0].CaPath, bodies[CaCertificateFile], 0644)
+
+	marker := filepath.Join(t.TempDir(), "action-ran")
+	config.Certificates[0].Action = configuration.ShellAction("/usr/bin/touch " + marker)
+
+	withoutForce := HandleCertificates(testLogger(), config)
+	if len(withoutForce.Unchanged) != 1 {
+		t.Fatalf("expected the certificate to be reported as unchanged: got %v", withoutForce.Unchanged)
+	}
+
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("expected no action to run without --force, got err=%v", err)
+	}
+
+	configuration.Force = true
+	forced := HandleCertificates(testLogger(), config)
+
+	if len(forced.Changed) != 1 || forced.Changed[0] != "example.com" {
+		t.Fatalf("expected --force to report the certificate as changed: got %v", forced.Changed)
+	}
+
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("expected --force to run the action: %v", err)
+	}
+
+	assertFileContents(t, config.Certificates[0].CertificatePath, bodies[CertificateFile])
+	assertFileContents(t, config.Certificates[0].KeyPath, bodies[KeyFile])
+	assertNoTempFiles(t, dir)
+}
+
+// TestHandleCertificatesPreservesFileModeAcrossRollout guards that going
+// through a temporary file does not widen the permissions of a private key.
+func TestHandleCertificatesPreservesFileModeAcrossRollout(t *testing.T) {
+	t.Cleanup(func() {
+		configuration.DryRun = false
+		configuration.Force = false
+	})
+
+	server := startArtefactServer(t, map[FileType]string{
+		CertificateFile:   "new-cert-body",
+		KeyFile:           "new-key-body",
+		CaCertificateFile: "new-ca-body",
+	})
+
+	dir := t.TempDir()
+	config := certConfig(server.URL, dir, "example.com")
+
+	seedFile(t, config.Certificates[0].CertificatePath, "old-cert-body", 0644)
+	seedFile(t, config.Certificates[0].KeyPath, "old-key-body", 0600)
+
+	result := HandleCertificates(testLogger(), config)
+
+	if len(result.Failed) != 0 {
+		t.Fatalf("unexpected failures: %v", result.Failed)
+	}
+
+	assertFileContents(t, config.Certificates[0].KeyPath, "new-key-body")
+	assertFileMode(t, config.Certificates[0].KeyPath, 0600)
+	assertFileContents(t, config.Certificates[0].CertificatePath, "new-cert-body")
+	assertFileMode(t, config.Certificates[0].CertificatePath, 0644)
+	assertNoTempFiles(t, dir)
+}
+
+func assertFileMode(t *testing.T, path string, want os.FileMode) {
+	t.Helper()
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("failed to stat %s: %v", path, err)
+	}
+
+	if info.Mode().Perm() != want {
+		t.Fatalf("unexpected mode of %s: got %o want %o", path, info.Mode().Perm(), want)
+	}
+}
+
+// TestHandleCertificateActionStringFormRunsPlainCommand pins the form every
+// pre-existing config uses: a single command with simple arguments must keep
+// working exactly as before.
+func TestHandleCertificateActionStringFormRunsPlainCommand(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "plain-command-ran")
+
+	if err := handleCertificateAction(testLogger(), configuration.ShellAction("/usr/bin/touch "+target)); err != nil {
+		t.Fatalf("handleCertificateAction returned error: %v", err)
+	}
+
+	assertFileExists(t, target)
+}
+
+// TestHandleCertificateActionStringFormChainsCommands is the regression guard
+// for #29: before the shell was involved, "a && b" ran a with "&&" and "b" as
+// literal arguments, so b never executed at all.
+func TestHandleCertificateActionStringFormChainsCommands(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "chain")
+	first := writeActionScript(t, "printf 'first\n' >> "+marker+"\n")
+	second := writeActionScript(t, "printf 'second\n' >> "+marker+"\n")
+
+	action := configuration.ShellAction(first + " && " + second)
+	if err := handleCertificateAction(testLogger(), action); err != nil {
+		t.Fatalf("handleCertificateAction returned error: %v", err)
+	}
+
+	// Both ran, and in order: without a shell only the first script would have
+	// executed, with "&&" and the second path handed to it as arguments.
+	assertFileContents(t, marker, "first\nsecond\n")
+}
+
+// TestHandleCertificateActionStringFormHonoursQuoting proves an argument with
+// spaces survives as a single argument when it is quoted, which was
+// inexpressible while the action was split on whitespace.
+func TestHandleCertificateActionStringFormHonoursQuoting(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "args")
+	script := writeActionScript(t, "printf '%s\\n' \"$#\" \"$1\" > "+out+"\n")
+
+	action := configuration.ShellAction(script + " 'cert renewed'")
+	if err := handleCertificateAction(testLogger(), action); err != nil {
+		t.Fatalf("handleCertificateAction returned error: %v", err)
+	}
+
+	assertFileContents(t, out, "1\ncert renewed\n")
+}
+
+// TestHandleCertificateActionListFormExecsWithoutShell pins the list form: no
+// shell means no operator handling, no variable expansion, and arguments that
+// arrive byte-for-byte as configured.
+func TestHandleCertificateActionListFormExecsWithoutShell(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "args")
+	script := writeActionScript(t, "for arg in \"$@\"; do printf '%s\\n' \"$arg\" >> "+out+"; done\n")
+
+	action := configuration.ExecAction(script, "cert renewed", "$HOME", "&&", "/usr/bin/touch /tmp/should-not-exist")
+	if err := handleCertificateAction(testLogger(), action); err != nil {
+		t.Fatalf("handleCertificateAction returned error: %v", err)
+	}
+
+	assertFileContents(t, out, "cert renewed\n$HOME\n&&\n/usr/bin/touch /tmp/should-not-exist\n")
+}
+
+func TestHandleCertificateActionEmptyListIsNoop(t *testing.T) {
+	if err := handleCertificateAction(testLogger(), configuration.ExecAction()); err != nil {
+		t.Fatalf("expected an empty action list to be ignored, got error: %v", err)
+	}
+}
+
+func TestActionCommandPicksExecutionMode(t *testing.T) {
+	shell, runnable := actionCommand(configuration.ShellAction("systemctl reload nginx"))
+	if !runnable {
+		t.Fatal("expected the string form to be runnable")
+	}
+
+	wantShellArgs := []string{configuration.ShellPath, "-c", "systemctl reload nginx"}
+	if !slices.Equal(shell.Args, wantShellArgs) {
+		t.Fatalf("string form built %v, want %v", shell.Args, wantShellArgs)
+	}
+
+	list, runnable := actionCommand(configuration.ExecAction("/usr/bin/systemctl", "reload", "nginx"))
+	if !runnable {
+		t.Fatal("expected the list form to be runnable")
+	}
+
+	wantListArgs := []string{"/usr/bin/systemctl", "reload", "nginx"}
+	if !slices.Equal(list.Args, wantListArgs) {
+		t.Fatalf("list form built %v, want %v", list.Args, wantListArgs)
+	}
+
+	if _, runnable := actionCommand(configuration.ShellAction("  ")); runnable {
+		t.Fatal("expected a blank action to be reported as not runnable")
+	}
+}
+
+// TestAggregateStateFoldsArtefacts pins the aggregation rule: new beats
+// changed, changed beats unchanged.
+func TestAggregateStateFoldsArtefacts(t *testing.T) {
+	tests := []struct {
+		name   string
+		states []RolloutState
+		want   RolloutState
+	}{
+		{name: "nothing happened", states: []RolloutState{Unchanged, Unchanged, Unchanged}, want: Unchanged},
+		{name: "a single artefact changed", states: []RolloutState{Unchanged, Modified, Unchanged}, want: Modified},
+		{name: "a single artefact was created", states: []RolloutState{Unchanged, Unchanged, Created}, want: Created},
+		{name: "created outranks modified", states: []RolloutState{Modified, Created, Unchanged}, want: Created},
+		{name: "created outranks modified regardless of order", states: []RolloutState{Created, Modified, Modified}, want: Created},
+		{name: "no artefacts at all", states: nil, want: Unchanged},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := aggregateState(tc.states...); got != tc.want {
+				t.Fatalf("aggregateState(%v) = %v, want %v", tc.states, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestHandleCertificatesRunOnPolicies walks every run_on policy against every
+// rollout outcome, with and without --force.
+//
+// The omitted policy is in the table on purpose: it must behave exactly like
+// new_or_changed, which is what the tool did before run_on existed.
+func TestHandleCertificatesRunOnPolicies(t *testing.T) {
+	const serverBody = "server-body"
+
+	states := []struct {
+		name string
+
+		// seed is the content to put on disk first, "" means no file at all
+		seed string
+
+		want RolloutState
+	}{
+		{name: "new", seed: "", want: Created},
+		{name: "changed", seed: "stale-body", want: Modified},
+		{name: "unchanged", seed: serverBody, want: Unchanged},
+	}
+
+	policies := []struct {
+		name  string
+		runOn string
+
+		// runsAction maps a state name onto whether the action fires when
+		// --force is not given
+		runsAction map[string]bool
+	}{
+		{
+			name:       "omitted",
+			runOn:      "",
+			runsAction: map[string]bool{"new": true, "changed": true, "unchanged": false},
+		},
+		{
+			name:       "new_or_changed",
+			runOn:      "new_or_changed",
+			runsAction: map[string]bool{"new": true, "changed": true, "unchanged": false},
+		},
+		{
+			name:       "new",
+			runOn:      "new",
+			runsAction: map[string]bool{"new": true, "changed": false, "unchanged": false},
+		},
+		{
+			name:       "changed",
+			runOn:      "changed",
+			runsAction: map[string]bool{"new": false, "changed": true, "unchanged": false},
+		},
+		{
+			name:       "all",
+			runOn:      "all",
+			runsAction: map[string]bool{"new": true, "changed": true, "unchanged": true},
+		},
+	}
+
+	for _, policy := range policies {
+		for _, state := range states {
+			for _, force := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/%s/force=%v", policy.name, state.name, force), func(t *testing.T) {
+					t.Cleanup(func() {
+						configuration.Force = false
+						configuration.DryRun = false
+					})
+					configuration.Force = force
+
+					server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						_, _ = w.Write([]byte(serverBody))
+					}))
+					defer server.Close()
+
+					tmpDir := t.TempDir()
+					certPath := filepath.Join(tmpDir, "cert.pem")
+					if state.seed != "" {
+						if err := os.WriteFile(certPath, []byte(state.seed), 0644); err != nil {
+							t.Fatalf("failed to seed certificate: %v", err)
+						}
+					}
+
+					marker := filepath.Join(tmpDir, "action.log")
+					script := writeActionScript(t, "printf 'run\\n' >> "+marker+"\n")
+
+					config := &configuration.ConfigFileData{
+						BaseURL: server.URL,
+						Certificates: []configuration.CertificateData{
+							{
+								Name:              "example.com",
+								CertificateSecret: "secret",
+								CertificatePath:   certPath,
+								Action:            configuration.ShellAction(script),
+								RunOn:             policy.runOn,
+							},
+						},
+					}
+
+					result := HandleCertificates(testLogger(), config)
+
+					if len(result.Failed) != 0 || len(result.ActionFailed) != 0 {
+						t.Fatalf("unexpected failures: %v %v", result.Failed, result.ActionFailed)
+					}
+
+					// --force forces the action regardless of run_on, exactly
+					// as it forced the write.
+					wantAction := policy.runsAction[state.name] || force
+					assertActionRuns(t, marker, wantAction)
+
+					// The file is always deployed, whatever run_on says: run_on
+					// only ever gates the action.
+					assertFileContents(t, certPath, serverBody)
+
+					// --force rewrites an identical file and reports it as
+					// changed. That is a known wart, pinned here so it does not
+					// change by accident.
+					wantState := state.want
+					if force && wantState == Unchanged {
+						wantState = Modified
+					}
+					assertCertificateState(t, result, "example.com", wantState)
+				})
+			}
+		}
+	}
+}
+
+// assertActionRuns asserts that the action marker recorded exactly one run, or
+// no run at all.
+func assertActionRuns(t *testing.T, marker string, want bool) {
+	t.Helper()
+
+	if !want {
+		if _, err := os.Stat(marker); !os.IsNotExist(err) {
+			t.Fatalf("expected action not to run, got err=%v", err)
+		}
+		return
+	}
+
+	assertActionCount(t, marker, 1)
+}
+
+func assertActionCount(t *testing.T, marker string, want int) {
+	t.Helper()
+
+	data, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatalf("failed to read action marker %s: %v", marker, err)
+	}
+
+	if got := len(strings.Fields(string(data))); got != want {
+		t.Fatalf("unexpected action count: got %d want %d", got, want)
+	}
+}
+
+// assertCertificateState asserts which RunResult bucket a certificate landed in.
+func assertCertificateState(t *testing.T, result RunResult, name string, want RolloutState) {
+	t.Helper()
+
+	buckets := map[RolloutState][]string{
+		Created:   result.New,
+		Modified:  result.Changed,
+		Unchanged: result.Unchanged,
+	}
+
+	for state, names := range buckets {
+		if slices.Contains(names, name) != (state == want) {
+			t.Fatalf("certificate %q: want state %v, got new=%v changed=%v unchanged=%v",
+				name, want, result.New, result.Changed, result.Unchanged)
+		}
+	}
+}
+
+// TestNeedsRolloutIsTriState is the core of #31: "no file" and "different
+// file" both used to be a plain true, which made a first deployment
+// indistinguishable from a renewal.
+func TestNeedsRolloutIsTriState(t *testing.T) {
+	tests := []struct {
+		name string
+		seed string
+		want RolloutState
+	}{
+		{name: "missing file is created", seed: "", want: Created},
+		{name: "differing file is modified", seed: "stale-body", want: Modified},
+		{name: "identical file is unchanged", seed: "server-body", want: Unchanged},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "cert.pem")
+			if tc.seed != "" {
+				if err := os.WriteFile(path, []byte(tc.seed), 0644); err != nil {
+					t.Fatalf("failed to seed file: %v", err)
+				}
+			}
+
+			cert := GenericCertificate{FilePath: path, serverBytes: []byte("server-body")}
+
+			got, err := cert.needsRollout(testLogger())
+			if err != nil {
+				t.Fatalf("needsRollout returned error: %v", err)
+			}
+
+			if got != tc.want {
+				t.Fatalf("needsRollout = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestHandleCertificatesSuppressesActionsWhenDisabled covers #46 at the unit
+// level: files still deploy, the skipped command is logged, and a suppressed
+// action is not a failure.
+func TestHandleCertificatesSuppressesActionsWhenDisabled(t *testing.T) {
+	disabled := false
+	enabled := true
+
+	tests := []struct {
+		name       string
+		configured *bool
+		noActions  bool
+		wantAction bool
+	}{
+		{name: "default is on", configured: nil, noActions: false, wantAction: true},
+		{name: "config off", configured: &disabled, noActions: false, wantAction: false},
+		{name: "config on", configured: &enabled, noActions: false, wantAction: true},
+		{name: "flag off", configured: nil, noActions: true, wantAction: false},
+		{name: "flag overrides config on", configured: &enabled, noActions: true, wantAction: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Cleanup(func() {
+				configuration.NoActions = false
+				configuration.Force = false
+				configuration.DryRun = false
+			})
+			configuration.NoActions = tc.noActions
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte("server-body"))
+			}))
+			defer server.Close()
+
+			tmpDir := t.TempDir()
+			certPath := filepath.Join(tmpDir, "cert.pem")
+			marker := filepath.Join(tmpDir, "action.log")
+			script := writeActionScript(t, "printf 'run\\n' >> "+marker+"\n")
+
+			config := &configuration.ConfigFileData{
+				BaseURL: server.URL,
+				Actions: configuration.ActionsConfig{Enabled: tc.configured},
+				Certificates: []configuration.CertificateData{
+					{
+						Name:              "example.com",
+						CertificateSecret: "secret",
+						CertificatePath:   certPath,
+						Action:            configuration.ShellAction(script),
+					},
+				},
+			}
+
+			var logs bytes.Buffer
+			result := HandleCertificates(capturingLogger(&logs), config)
+
+			// The certificate deploys either way: #46 is about actions only.
+			assertFileContents(t, certPath, "server-body")
+			assertCertificateState(t, result, "example.com", Created)
+			assertActionRuns(t, marker, tc.wantAction)
+
+			if tc.wantAction {
+				if len(result.ActionSkipped) != 0 {
+					t.Fatalf("unexpected skipped actions: %v", result.ActionSkipped)
+				}
+				return
+			}
+
+			if len(result.ActionSkipped) != 1 || result.ActionSkipped[0] != "example.com" {
+				t.Fatalf("unexpected skipped actions: %v", result.ActionSkipped)
+			}
+
+			// A suppressed action is not a failure.
+			if len(result.ActionFailed) != 0 {
+				t.Fatalf("a suppressed action must not be a failure: %v", result.ActionFailed)
+			}
+
+			if result.ExitCode() != ExitSuccess {
+				t.Fatalf("unexpected exit code: got %d want %d", result.ExitCode(), ExitSuccess)
+			}
+
+			line := findLogLine(t, logs.String(), "Actions are disabled")
+			if !strings.Contains(line, "level=INFO") {
+				t.Fatalf("expected the suppressed action to be logged at INFO, got: %s", line)
+			}
+
+			// the command that did not run must be in the log
+			if !strings.Contains(line, script) {
+				t.Fatalf("expected the skipped command in the log record, got: %s", line)
+			}
+		})
+	}
+}
+
+// TestHandleCertificatesSuppressedActionNeverFails pins that an action that
+// would have exited non-zero cannot produce exit code 3 while actions are off.
+func TestHandleCertificatesSuppressedActionNeverFails(t *testing.T) {
+	t.Cleanup(func() {
+		configuration.NoActions = false
+		configuration.Force = false
+	})
+	configuration.NoActions = true
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("server-body"))
+	}))
+	defer server.Close()
+
+	tmpDir := t.TempDir()
+	config := &configuration.ConfigFileData{
+		BaseURL: server.URL,
+		Certificates: []configuration.CertificateData{
+			{
+				Name:              "example.com",
+				CertificateSecret: "secret",
+				CertificatePath:   filepath.Join(tmpDir, "cert.pem"),
+				Action:            configuration.ShellAction("exit 7"),
+			},
+		},
+	}
+
+	result := HandleCertificates(testLogger(), config)
+
+	if len(result.ActionFailed) != 0 {
+		t.Fatalf("a suppressed action must never fail: %v", result.ActionFailed)
+	}
+
+	if result.ExitCode() != ExitSuccess {
+		t.Fatalf("unexpected exit code: got %d want %d", result.ExitCode(), ExitSuccess)
+	}
+}
+
+// TestHandleCertificatesEmptyActionIsNotReportedAsSkipped keeps the skipped
+// count honest: a certificate without an action has nothing to suppress.
+func TestHandleCertificatesEmptyActionIsNotReportedAsSkipped(t *testing.T) {
+	t.Cleanup(func() { configuration.NoActions = false })
+	configuration.NoActions = true
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("server-body"))
+	}))
+	defer server.Close()
+
+	config := &configuration.ConfigFileData{
+		BaseURL: server.URL,
+		Certificates: []configuration.CertificateData{
+			{
+				Name:              "example.com",
+				CertificateSecret: "secret",
+				CertificatePath:   filepath.Join(t.TempDir(), "cert.pem"),
+			},
+		},
+	}
+
+	result := HandleCertificates(testLogger(), config)
+
+	if len(result.ActionSkipped) != 0 {
+		t.Fatalf("expected no skipped actions for a certificate without one: %v", result.ActionSkipped)
+	}
+}
+
+// The privatecert and privatecertchain endpoints authenticate with both
+// secrets joined by a dot. Getting this wrong yields a 401 against a real
+// CertWarden, so the exact shape is pinned here.
+func TestCombinedSecretJoinsCertAndKeySecretWithDot(t *testing.T) {
+	cert := configuration.CertificateData{
+		CertificateSecret: "cert-secret",
+		KeySecret:         "key-secret",
+	}
+
+	if got := combinedSecret(cert); got != "cert-secret.key-secret" {
+		t.Fatalf("unexpected combined secret: got %q want %q", got, "cert-secret.key-secret")
+	}
+}
+
+func TestFetchFromServerUsesPrivateCertEndpoints(t *testing.T) {
+	tests := []struct {
+		name     string
+		fileType FileType
+		wantPath string
+	}{
+		{name: "privatecert", fileType: PrivateCertFile, wantPath: constants.PrivateCertApiPath + "example.com"},
+		{name: "privatecertchain", fileType: PrivateCertChainFile, wantPath: constants.PrivateCertChainApiPath + "example.com"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var requestedPath string
+			var apiKey string
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requestedPath = r.URL.Path
+				apiKey = r.Header.Get(constants.ApiKeyHeaderName)
+				_, _ = w.Write([]byte("server-bytes"))
+			}))
+			defer server.Close()
+
+			cert := GenericCertificate{
+				Name:   "example.com",
+				Secret: "cert-secret.key-secret",
+				Type:   test.fileType,
+			}
+
+			if err := cert.fetchFromServer(testLogger(), server.URL, false); err != nil {
+				t.Fatalf("fetchFromServer returned error: %v", err)
+			}
+
+			if requestedPath != test.wantPath {
+				t.Fatalf("unexpected request path: got %q want %q", requestedPath, test.wantPath)
+			}
+
+			if apiKey != "cert-secret.key-secret" {
+				t.Fatalf("unexpected api key: got %q", apiKey)
+			}
+		})
+	}
+}
+
+// A config that sets the new paths must fetch both new endpoints with the
+// combined secret, and must still deploy the classic three artefacts.
+func TestHandleCertificatesRollsOutPrivateCertEndpoints(t *testing.T) {
+	t.Cleanup(func() {
+		configuration.DryRun = false
+		configuration.Force = false
+	})
+
+	requestedKeys := map[string]string{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestedKeys[r.URL.Path] = r.Header.Get(constants.ApiKeyHeaderName)
+		_, _ = w.Write([]byte("body-" + r.URL.Path))
+	}))
+	defer server.Close()
+
+	tmpDir := t.TempDir()
+	privateCertPath := filepath.Join(tmpDir, "app.pem")
+	privateCertChainPath := filepath.Join(tmpDir, "app-fullchain.pem")
+
+	config := &configuration.ConfigFileData{
+		BaseURL: server.URL,
+		Certificates: []configuration.CertificateData{
+			{
+				Name:                 "example.com",
+				CertificateSecret:    "cert-secret",
+				CertificatePath:      filepath.Join(tmpDir, "cert.pem"),
+				KeySecret:            "key-secret",
+				KeyPath:              filepath.Join(tmpDir, "key.pem"),
+				PrivateCertPath:      privateCertPath,
+				PrivateCertChainPath: privateCertChainPath,
+			},
+		},
+	}
+
+	result := HandleCertificates(testLogger(), config)
+
+	if len(result.Failed) != 0 {
+		t.Fatalf("unexpected failures: %v", result.Failed)
+	}
+
+	assertFileExists(t, privateCertPath)
+	assertFileExists(t, privateCertChainPath)
+
+	for _, apiPath := range []string{constants.PrivateCertApiPath, constants.PrivateCertChainApiPath} {
+		gotKey, ok := requestedKeys[apiPath+"example.com"]
+		if !ok {
+			t.Fatalf("endpoint %q was never requested, got %v", apiPath, requestedKeys)
+		}
+
+		if gotKey != "cert-secret.key-secret" {
+			t.Fatalf("endpoint %q used api key %q, want the combined secret", apiPath, gotKey)
+		}
+	}
+
+	// The classic endpoints keep using the plain certificate secret.
+	if got := requestedKeys[constants.CertificateApiPath+"example.com"]; got != "cert-secret" {
+		t.Fatalf("certificate endpoint used api key %q, want %q", got, "cert-secret")
+	}
+}
+
+// Omitting the new paths must behave exactly like before they existed: the two
+// endpoints are never contacted.
+func TestHandleCertificatesSkipsOmittedPrivateCertPaths(t *testing.T) {
+	t.Cleanup(func() {
+		configuration.DryRun = false
+		configuration.Force = false
+	})
+
+	var requestedPaths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestedPaths = append(requestedPaths, r.URL.Path)
+		_, _ = w.Write([]byte("body"))
+	}))
+	defer server.Close()
+
+	config := &configuration.ConfigFileData{
+		BaseURL: server.URL,
+		Certificates: []configuration.CertificateData{
+			{
+				Name:              "example.com",
+				CertificateSecret: "cert-secret",
+				CertificatePath:   filepath.Join(t.TempDir(), "cert.pem"),
+			},
+		},
+	}
+
+	result := HandleCertificates(testLogger(), config)
+
+	if len(result.Failed) != 0 {
+		t.Fatalf("unexpected failures: %v", result.Failed)
+	}
+
+	for _, path := range requestedPaths {
+		if strings.HasPrefix(path, constants.PrivateCertApiPath) || strings.HasPrefix(path, constants.PrivateCertChainApiPath) {
+			t.Fatalf("unset path must not be fetched, but %q was requested", path)
+		}
+	}
+}
+
+func TestHandleCertificatesRecordsPrivateCertFailureWithFileType(t *testing.T) {
+	t.Cleanup(func() {
+		configuration.DryRun = false
+		configuration.Force = false
+	})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, constants.PrivateCertApiPath) {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_, _ = w.Write([]byte("body"))
+	}))
+	defer server.Close()
+
+	tmpDir := t.TempDir()
+	config := &configuration.ConfigFileData{
+		BaseURL: server.URL,
+		Certificates: []configuration.CertificateData{
+			{
+				Name:              "example.com",
+				CertificateSecret: "cert-secret",
+				CertificatePath:   filepath.Join(tmpDir, "cert.pem"),
+				KeySecret:         "key-secret",
+				PrivateCertPath:   filepath.Join(tmpDir, "app.pem"),
+			},
+		},
+	}
+
+	result := HandleCertificates(testLogger(), config)
+
+	if len(result.Failed) != 1 {
+		t.Fatalf("unexpected failure count: got %d want 1 (%v)", len(result.Failed), result.Failed)
+	}
+
+	if result.Failed[0].Type != PrivateCertFile {
+		t.Fatalf("unexpected failed file type: got %v want %v", result.Failed[0].Type, PrivateCertFile)
+	}
+
+	if result.ExitCode() != ExitCertificateFailure {
+		t.Fatalf("unexpected exit code: got %d want %d", result.ExitCode(), ExitCertificateFailure)
+	}
+}
+
+func TestFileTypeStringCoversPrivateCertTypes(t *testing.T) {
+	if got := PrivateCertFile.String(); got != "privatecert" {
+		t.Fatalf("unexpected PrivateCertFile string: got %q", got)
+	}
+
+	if got := PrivateCertChainFile.String(); got != "privatecertchain" {
+		t.Fatalf("unexpected PrivateCertChainFile string: got %q", got)
+	}
+}
+
+// TestHandleCertificatesFailingPrivateCertKeepsOldArtefacts is the #28 guard for
+// the artefacts added by #4.
+//
+// The combined endpoints are part of the same certificate as the classic three,
+// so a privatecert that cannot be fetched must abort the whole set: the old
+// certificate, key and CA have to survive a failed run untouched. Rolling the
+// new artefacts out on their own path would reintroduce exactly the
+// publish-as-you-go bug #28 removed, one endpoint later.
+func TestHandleCertificatesFailingPrivateCertKeepsOldArtefacts(t *testing.T) {
+	t.Cleanup(func() {
+		configuration.DryRun = false
+		configuration.Force = false
+	})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, constants.PrivateCertApiPath) {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		_, _ = w.Write([]byte("new-body"))
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	config := certConfig(server.URL, dir, "example.com")
+	config.Certificates[0].KeySecret = "key-secret"
+	config.Certificates[0].PrivateCertPath = filepath.Join(dir, "example.com-app.pem")
+
+	seedFile(t, config.Certificates[0].CertificatePath, "old-cert-body", 0644)
+	seedFile(t, config.Certificates[0].KeyPath, "old-key-body", 0600)
+	seedFile(t, config.Certificates[0].CaPath, "old-ca-body", 0644)
+
+	result := HandleCertificates(testLogger(), config)
+
+	assertSingleFailure(t, result, "example.com", PrivateCertFile)
+
+	// the artefacts that fetched fine must still not have been published
+	assertFileContents(t, config.Certificates[0].CertificatePath, "old-cert-body")
+	assertFileContents(t, config.Certificates[0].KeyPath, "old-key-body")
+	assertFileContents(t, config.Certificates[0].CaPath, "old-ca-body")
+
+	if _, err := os.Stat(config.Certificates[0].PrivateCertPath); !os.IsNotExist(err) {
+		t.Fatalf("expected the private cert to be absent, got err=%v", err)
+	}
+
+	assertNoTempFiles(t, dir)
+}
+
+func TestFetchFromServerAppendsFormatQuery(t *testing.T) {
+	tests := []struct {
+		name      string
+		format    string
+		wantQuery string
+	}{
+		{name: "pem is the default and is not sent", format: constants.FormatPEM, wantQuery: ""},
+		{name: "empty is the default and is not sent", format: "", wantQuery: ""},
+		{name: "pkcs12", format: constants.FormatPKCS12, wantQuery: "format=pkcs12"},
+		{name: "jks", format: constants.FormatJKS, wantQuery: "format=jks"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var rawQuery string
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				rawQuery = r.URL.RawQuery
+				_, _ = w.Write([]byte("server-bytes"))
+			}))
+			defer server.Close()
+
+			cert := GenericCertificate{
+				Name:   "example.com",
+				Secret: "cert-secret.key-secret",
+				Type:   PrivateCertFile,
+				Format: test.format,
+			}
+
+			if err := cert.fetchFromServer(testLogger(), server.URL, false); err != nil {
+				t.Fatalf("fetchFromServer returned error: %v", err)
+			}
+
+			if rawQuery != test.wantQuery {
+				t.Fatalf("unexpected query: got %q want %q", rawQuery, test.wantQuery)
+			}
+		})
+	}
+}
+
+// binaryBody is deliberately not valid UTF-8: a pkcs12 or jks container is
+// arbitrary binary, and anything that treats the pipeline as text (a string
+// round-trip, a text-mode write) corrupts it.
+var binaryBody = []byte{0x30, 0x82, 0x00, 0xff, 0xfe, 0x00, 0x80, 0x81, 0x01, 0x00, 0xc3, 0x28}
+
+// ASSUMPTION, NOT VERIFIED AGAINST A LIVE SERVER: CertWarden returns the same
+// bytes for an unchanged certificate in pkcs12/jks form, the way it does for
+// pem.
+//
+// This test pins the behaviour that follows from that assumption: identical
+// binary bodies hash identically, so the second run is Unchanged and the action
+// does not fire. If CertWarden actually rebuilds the container per request with
+// a fresh salt/IV, the assumption is wrong and the real-world behaviour is
+// "changed on every run" - this test will still pass, because it serves stable
+// bytes, but the comment in fetchFromServer and this note are the record that
+// change detection then needs to move off the raw bytes.
+func TestFetchFromServerAssumesDeterministicBinaryBodies(t *testing.T) {
+	t.Cleanup(func() {
+		configuration.DryRun = false
+		configuration.Force = false
+	})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		_, _ = w.Write(binaryBody)
+	}))
+	defer server.Close()
+
+	config := &configuration.ConfigFileData{
+		BaseURL: server.URL,
+		Certificates: []configuration.CertificateData{
+			{
+				Name:              "example.com",
+				CertificateSecret: "cert-secret",
+				CertificatePath:   filepath.Join(t.TempDir(), "cert.pem"),
+				KeySecret:         "key-secret",
+				PrivateCertPath:   filepath.Join(t.TempDir(), "keystore.p12"),
+				PrivateCertFormat: constants.FormatPKCS12,
+			},
+		},
+	}
+
+	first := HandleCertificates(testLogger(), config)
+	if len(first.New) != 1 {
+		t.Fatalf("expected the first run to deploy the certificate: %v", first)
+	}
+
+	second := HandleCertificates(testLogger(), config)
+	if len(second.Unchanged) != 1 {
+		t.Fatalf("identical binary bytes must be detected as unchanged, got %v", second)
+	}
+
+	// The counterpart of the assumption: different bytes must be detected.
+	// Change detection itself works on binary, only the server's determinism is
+	// in question.
+	if !bytes.Equal(binaryBody, []byte{0x30, 0x82, 0x00, 0xff, 0xfe, 0x00, 0x80, 0x81, 0x01, 0x00, 0xc3, 0x28}) {
+		t.Fatal("binaryBody fixture was mutated")
+	}
+}
+
+// Change detection must react to a single flipped bit in an otherwise identical
+// binary container.
+func TestNeedsRolloutDetectsBinaryDifference(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "keystore.p12")
+	if err := os.WriteFile(target, binaryBody, 0600); err != nil {
+		t.Fatalf("failed to seed file: %v", err)
+	}
+
+	changedBody := make([]byte, len(binaryBody))
+	copy(changedBody, binaryBody)
+	changedBody[3] ^= 0x01
+
+	cert := GenericCertificate{
+		FilePath:    target,
+		serverBytes: changedBody,
+	}
+
+	state, err := cert.needsRollout(testLogger())
+	if err != nil {
+		t.Fatalf("needsRollout returned error: %v", err)
+	}
+
+	// the file exists and differs, so this is a modification rather than a
+	// first deployment (#31)
+	if state != Modified {
+		t.Fatalf("expected a one-bit binary difference to be detected: got %v want %v", state, Modified)
+	}
+
+	same := GenericCertificate{
+		FilePath:    target,
+		serverBytes: binaryBody,
+	}
+
+	state, err = same.needsRollout(testLogger())
+	if err != nil {
+		t.Fatalf("needsRollout returned error: %v", err)
+	}
+
+	if state != Unchanged {
+		t.Fatalf("expected identical binary content to be detected as unchanged: got %v", state)
+	}
+}
+
+func TestRolloutWritesBinaryBodyByteExactly(t *testing.T) {
+	t.Cleanup(func() {
+		configuration.DryRun = false
+		configuration.Force = false
+	})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		_, _ = w.Write(binaryBody)
+	}))
+	defer server.Close()
+
+	target := filepath.Join(t.TempDir(), "keystore.p12")
+	cert := GenericCertificate{
+		Name:     "example.com",
+		FilePath: target,
+		Secret:   "cert-secret.key-secret",
+		Type:     PrivateCertFile,
+		Format:   constants.FormatPKCS12,
+	}
+
+	state, err := cert.Prepare(testLogger(), server.URL, false)
+	if err != nil {
+		t.Fatalf("Prepare returned error: %v", err)
+	}
+
+	// nothing exists at the target yet, so the first rollout creates it
+	if state != Created {
+		t.Fatalf("expected the first rollout to report a change: got %v want %v", state, Created)
+	}
+
+	if err := cert.Commit(testLogger()); err != nil {
+		t.Fatalf("Commit returned error: %v", err)
+	}
+
+	written, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("failed to read written file: %v", err)
+	}
+
+	if !bytes.Equal(written, binaryBody) {
+		t.Fatalf("binary body was not written byte-exactly: got % x want % x", written, binaryBody)
+	}
+}
+
+// TestFetchFromServerSendsConfiguredHeaders covers the Cloudflare Access /
+// Authelia / oauth2-proxy case: the request has to carry whatever the gateway
+// in front of CertWarden demands, or it never reaches CertWarden at all.
+func TestFetchFromServerSendsConfiguredHeaders(t *testing.T) {
+	var got http.Header
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Clone()
+		_, _ = w.Write([]byte("server-bytes"))
+	}))
+	defer server.Close()
+
+	cert := GenericCertificate{
+		Name:   "example.com",
+		Secret: "top-secret",
+		Type:   CertificateFile,
+		HTTP: configuration.HTTPSettings{
+			Headers: map[string]string{
+				"CF-Access-Client-Id":     "client-id",
+				"CF-Access-Client-Secret": "client-secret",
+			},
+		},
+	}
+
+	if err := cert.fetchFromServer(testLogger(), server.URL, false); err != nil {
+		t.Fatalf("fetchFromServer returned error: %v", err)
+	}
+
+	if got.Get("CF-Access-Client-Id") != "client-id" {
+		t.Fatalf("unexpected CF-Access-Client-Id: got %q", got.Get("CF-Access-Client-Id"))
+	}
+
+	if got.Get("CF-Access-Client-Secret") != "client-secret" {
+		t.Fatalf("unexpected CF-Access-Client-Secret: got %q", got.Get("CF-Access-Client-Secret"))
+	}
+
+	// the headers this tool owns must still be intact
+	if got.Get(constants.ApiKeyHeaderName) != "top-secret" {
+		t.Fatalf("unexpected api key: got %q", got.Get(constants.ApiKeyHeaderName))
+	}
+
+	if got.Get("User-Agent") != constants.UserAgent {
+		t.Fatalf("unexpected user agent: got %q", got.Get("User-Agent"))
+	}
+}
+
+// TestFetchFromServerApiKeyHeaderIsNotOverridable pins the ordering that makes a
+// config typo harmless: a run where every request silently 401s because the
+// config clobbered X-API-Key would be a miserable thing to debug.
+
+// TestFetchFromServerApiKeyHeaderIsNotOverridable pins the ordering that makes a
+// config typo harmless: a run where every request silently 401s because the
+// config clobbered X-API-Key would be a miserable thing to debug.
+func TestFetchFromServerApiKeyHeaderIsNotOverridable(t *testing.T) {
+	var got http.Header
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Clone()
+		_, _ = w.Write([]byte("server-bytes"))
+	}))
+	defer server.Close()
+
+	cert := GenericCertificate{
+		Name:   "example.com",
+		Secret: "real-secret",
+		Type:   CertificateFile,
+		HTTP: configuration.HTTPSettings{
+			Headers: map[string]string{
+				constants.ApiKeyHeaderName: "clobbered-by-config",
+				"User-Agent":               "clobbered-by-config",
+			},
+		},
+	}
+
+	if err := cert.fetchFromServer(testLogger(), server.URL, false); err != nil {
+		t.Fatalf("fetchFromServer returned error: %v", err)
+	}
+
+	if got.Get(constants.ApiKeyHeaderName) != "real-secret" {
+		t.Fatalf("config clobbered the api key header: got %q", got.Get(constants.ApiKeyHeaderName))
+	}
+
+	// exactly one value, the config header must not have been appended alongside
+	if values := got.Values(constants.ApiKeyHeaderName); len(values) != 1 {
+		t.Fatalf("expected a single api key header, got %v", values)
+	}
+
+	if got.Get("User-Agent") != constants.UserAgent {
+		t.Fatalf("config clobbered the user agent: got %q", got.Get("User-Agent"))
+	}
+}
+
+// TestFetchFromServerNeverLogsHeaderValues is the security guard for #36: the
+// header values are usually access tokens, so only the names may be logged.
+
+// TestFetchFromServerNeverLogsHeaderValues is the security guard for #36: the
+// header values are usually access tokens, so only the names may be logged.
+func TestFetchFromServerNeverLogsHeaderValues(t *testing.T) {
+	const headerSecret = "HEADERSECRETMUSTNEVERAPPEARINTHEJOURNAL"
+
+	var logs bytes.Buffer
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("server-bytes"))
+	}))
+	defer server.Close()
+
+	cert := GenericCertificate{
+		Name:   "example.com",
+		Secret: "top-secret",
+		Type:   CertificateFile,
+		HTTP: configuration.HTTPSettings{
+			Headers: map[string]string{"CF-Access-Client-Secret": headerSecret},
+		},
+	}
+
+	if err := cert.fetchFromServer(capturingLogger(&logs), server.URL, false); err != nil {
+		t.Fatalf("fetchFromServer returned error: %v", err)
+	}
+
+	if strings.Contains(logs.String(), headerSecret) {
+		t.Fatalf("header value leaked into log output: %q", logs.String())
+	}
+
+	// the name is logged, so a missing header is still diagnosable
+	if !strings.Contains(logs.String(), "CF-Access-Client-Secret") {
+		t.Fatalf("expected the header name to be logged at debug, got %q", logs.String())
+	}
+}
+
+// retryingSettings returns settings with a backoff short enough for a test.
+func retryingSettings(retries int) configuration.HTTPSettings {
+	return configuration.HTTPSettings{
+		Timeout:      2 * time.Second,
+		Retries:      retries,
+		RetryBackoff: time.Millisecond,
+	}
+}
+
+// TestFetchFromServerRetriesTransientFailures covers the failure #37 exists for:
+// a transient 502 used to lose the certificate until the next timer tick, which
+// can be days away.
+func TestFetchFromServerRetriesTransientFailures(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+	}{
+		{name: "internal server error", status: http.StatusInternalServerError},
+		{name: "bad gateway", status: http.StatusBadGateway},
+		{name: "service unavailable", status: http.StatusServiceUnavailable},
+		{name: "too many requests", status: http.StatusTooManyRequests},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var requests int
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests++
+				if requests == 1 {
+					w.WriteHeader(tc.status)
+					return
+				}
+				_, _ = w.Write([]byte("server-bytes"))
+			}))
+			defer server.Close()
+
+			cert := GenericCertificate{Name: "example.com", Type: CertificateFile, HTTP: retryingSettings(2)}
+
+			if err := cert.fetchFromServer(testLogger(), server.URL, false); err != nil {
+				t.Fatalf("expected the retry to succeed, got: %v", err)
+			}
+
+			if requests != 2 {
+				t.Fatalf("unexpected request count: got %d want 2", requests)
+			}
+
+			if string(cert.serverBytes) != "server-bytes" {
+				t.Fatalf("unexpected body after retry: got %q", string(cert.serverBytes))
+			}
+		})
+	}
+}
+
+// TestFetchFromServerRetriesTimeouts pins that a per-attempt timeout is retried
+// rather than being fatal for the certificate.
+func TestFetchFromServerRetriesTimeouts(t *testing.T) {
+	var requests int
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if requests == 1 {
+			// outlast the client timeout below, then let the client walk away
+			time.Sleep(300 * time.Millisecond)
+			return
+		}
+		_, _ = w.Write([]byte("server-bytes"))
+	}))
+	defer server.Close()
+
+	cert := GenericCertificate{
+		Name: "example.com",
+		Type: CertificateFile,
+		HTTP: configuration.HTTPSettings{
+			Timeout:      50 * time.Millisecond,
+			Retries:      2,
+			RetryBackoff: time.Millisecond,
+		},
+	}
+
+	if err := cert.fetchFromServer(testLogger(), server.URL, false); err != nil {
+		t.Fatalf("expected the retry after the timeout to succeed, got: %v", err)
+	}
+
+	if string(cert.serverBytes) != "server-bytes" {
+		t.Fatalf("unexpected body after retry: got %q", string(cert.serverBytes))
+	}
+}
+
+// TestFetchFromServerRetriesConnectionErrors covers the case where nothing is
+// listening at all, which is what a restarting upstream looks like.
+func TestFetchFromServerRetriesConnectionErrors(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	deadURL := server.URL
+	server.Close()
+
+	cert := GenericCertificate{Name: "example.com", Type: CertificateFile, HTTP: retryingSettings(2)}
+
+	var logs bytes.Buffer
+	err := cert.fetchFromServer(capturingLogger(&logs), deadURL, false)
+	if err == nil {
+		t.Fatal("expected an error when nothing is listening")
+	}
+
+	// two retries after the first attempt means two retry records
+	if got := strings.Count(logs.String(), "Retrying request to server"); got != 2 {
+		t.Fatalf("unexpected retry count: got %d want 2\n%s", got, logs.String())
+	}
+}
+
+// TestFetchFromServerDoesNotRetryClientErrors is the explicit guard for the
+// statuses that must never be retried. A rejected key or an unknown certificate
+// will not come right within a few seconds, so retrying only delays the error
+// and risks tripping rate limiting that would then also hurt the certificates
+// that are still fine.
+func TestFetchFromServerDoesNotRetryClientErrors(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+	}{
+		{name: "unauthorized", status: http.StatusUnauthorized},
+		{name: "forbidden", status: http.StatusForbidden},
+		{name: "not found", status: http.StatusNotFound},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var requests int
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests++
+				w.WriteHeader(tc.status)
+			}))
+			defer server.Close()
+
+			cert := GenericCertificate{Name: "example.com", Type: CertificateFile, HTTP: retryingSettings(5)}
+
+			if err := cert.fetchFromServer(testLogger(), server.URL, false); err == nil {
+				t.Fatalf("expected an error for %d", tc.status)
+			}
+
+			if requests != 1 {
+				t.Fatalf("status %d must not be retried: got %d requests want 1", tc.status, requests)
+			}
+		})
+	}
+}
+
+// TestFetchFromServerHonoursRetryAfter makes sure the server gets to set the
+// pace when it says so, instead of the client's own backoff.
+func TestFetchFromServerHonoursRetryAfter(t *testing.T) {
+	var requests int
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if requests == 1 {
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		_, _ = w.Write([]byte("server-bytes"))
+	}))
+	defer server.Close()
+
+	cert := GenericCertificate{
+		Name: "example.com",
+		Type: CertificateFile,
+		HTTP: configuration.HTTPSettings{
+			Timeout: 2 * time.Second,
+			Retries: 1,
+			// far shorter than the Retry-After, so a pass can only mean the
+			// header won over the backoff
+			RetryBackoff: time.Millisecond,
+		},
+	}
+
+	start := time.Now()
+	if err := cert.fetchFromServer(testLogger(), server.URL, false); err != nil {
+		t.Fatalf("expected the retry to succeed, got: %v", err)
+	}
+
+	if elapsed := time.Since(start); elapsed < time.Second {
+		t.Fatalf("expected Retry-After to delay the retry by ~1s, waited %v", elapsed)
+	}
+}
+
+func TestRetryAfterDelayIsIgnoredForOtherStatuses(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		header string
+		want   time.Duration
+	}{
+		{name: "429 seconds", status: http.StatusTooManyRequests, header: "5", want: 5 * time.Second},
+		{name: "503 seconds", status: http.StatusServiceUnavailable, header: "2", want: 2 * time.Second},
+		{name: "clamped to the cap", status: http.StatusTooManyRequests, header: "86400", want: maxRetryDelay},
+		{name: "ignored on 500", status: http.StatusInternalServerError, header: "5", want: 0},
+		{name: "unparseable is ignored", status: http.StatusTooManyRequests, header: "soon", want: 0},
+		{name: "absent header", status: http.StatusTooManyRequests, header: "", want: 0},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			res := &http.Response{StatusCode: tc.status, Header: http.Header{}}
+			if tc.header != "" {
+				res.Header.Set("Retry-After", tc.header)
+			}
+
+			if got := retryAfterDelay(res); got != tc.want {
+				t.Fatalf("unexpected delay: got %v want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestFetchFromServerRetriesAreVisibleInLogs pins the reporting contract: each
+// retry is a Debug record, and only giving up is loud.
+func TestFetchFromServerRetriesAreVisibleInLogs(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte("upstream is having a moment"))
+	}))
+	defer server.Close()
+
+	cert := GenericCertificate{Name: "example.com", Type: CertificateFile, HTTP: retryingSettings(2)}
+
+	var logs bytes.Buffer
+	if err := cert.fetchFromServer(capturingLogger(&logs), server.URL, false); err == nil {
+		t.Fatal("expected an error once the retries are used up")
+	}
+
+	retryLine := findLogLine(t, logs.String(), "Retrying request to server")
+	if !strings.Contains(retryLine, "level=DEBUG") {
+		t.Fatalf("expected retries to be logged at DEBUG, got: %s", retryLine)
+	}
+
+	if !strings.Contains(retryLine, "attempt=1") || !strings.Contains(retryLine, "attempts=3") {
+		t.Fatalf("expected the attempt counters in the retry record, got: %s", retryLine)
+	}
+
+	giveUpLine := findLogLine(t, logs.String(), "Giving up on request to server")
+	if !strings.Contains(giveUpLine, "level=WARN") {
+		t.Fatalf("expected the final failure to be logged at WARN, got: %s", giveUpLine)
+	}
+
+	if !strings.Contains(giveUpLine, "attempts=3") {
+		t.Fatalf("expected the attempt count when giving up, got: %s", giveUpLine)
+	}
+}
+
+// TestFetchFromServerDoesNotWarnWithoutRetries makes sure a run with retrying
+// switched off reports exactly what it used to.
+func TestFetchFromServerDoesNotWarnWithoutRetries(t *testing.T) {
+	var requests int
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	cert := GenericCertificate{Name: "example.com", Type: CertificateFile, HTTP: retryingSettings(0)}
+
+	var logs bytes.Buffer
+	if err := cert.fetchFromServer(capturingLogger(&logs), server.URL, false); err == nil {
+		t.Fatal("expected an error for a 500")
+	}
+
+	if requests != 1 {
+		t.Fatalf("retries: 0 must make exactly one request, got %d", requests)
+	}
+
+	if strings.Contains(logs.String(), "level=WARN") {
+		t.Fatalf("expected no give-up warning when retrying is disabled, got:\n%s", logs.String())
+	}
+}
+
+// TestFetchFromServerUsesConfiguredTimeout makes sure http.timeout actually
+// bounds the attempt, rather than the old hard-coded 10s doing it.
+func TestFetchFromServerUsesConfiguredTimeout(t *testing.T) {
+	release := make(chan struct{})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-release
+	}))
+	defer server.Close()
+	defer close(release)
+
+	cert := GenericCertificate{
+		Name: "example.com",
+		Type: CertificateFile,
+		HTTP: configuration.HTTPSettings{Timeout: 80 * time.Millisecond},
+	}
+
+	start := time.Now()
+	err := cert.fetchFromServer(testLogger(), server.URL, false)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected the request to time out")
+	}
+
+	// the old hard-coded timeout was 10s, so anything near it means the config
+	// value was ignored
+	if elapsed > 2*time.Second {
+		t.Fatalf("expected the configured timeout to apply, waited %v", elapsed)
+	}
+}
+
+// TestFetchFromServerDefaultsTimeoutWhenUnset guards the one value that must not
+// be taken literally: a zero Timeout means "no timeout at all" to http.Client,
+// which would let a run hang forever.
+func TestFetchFromServerDefaultsTimeoutWhenUnset(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("server-bytes"))
+	}))
+	defer server.Close()
+
+	cert := GenericCertificate{Name: "example.com", Type: CertificateFile}
+
+	if err := cert.fetchFromServer(testLogger(), server.URL, false); err != nil {
+		t.Fatalf("fetchFromServer returned error: %v", err)
+	}
+}
+
+func TestBackoffDelayGrowsAndStaysInItsWindow(t *testing.T) {
+	const base = 100 * time.Millisecond
+
+	for attempt := 1; attempt <= 4; attempt++ {
+		want := base << (attempt - 1)
+
+		// jitter covers the lower half of the window, so the delay always lands
+		// in [want/2, want]
+		for i := 0; i < 50; i++ {
+			got := backoffDelay(base, attempt)
+			if got > want || got < want/2 {
+				t.Fatalf("attempt %d: delay %v outside [%v, %v]", attempt, got, want/2, want)
+			}
+		}
+	}
+}
+
+func TestBackoffDelayIsCappedAndHandlesZeroBase(t *testing.T) {
+	if got := backoffDelay(0, 3); got != 0 {
+		t.Fatalf("a zero base must not produce a wait, got %v", got)
+	}
+
+	if got := backoffDelay(time.Hour, 5); got > maxRetryDelay {
+		t.Fatalf("expected the backoff to be capped at %v, got %v", maxRetryDelay, got)
 	}
 }

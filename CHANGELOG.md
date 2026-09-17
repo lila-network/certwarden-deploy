@@ -10,11 +10,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Unit and E2E tests
+- Config file is searched in `./certwarden-deploy.yaml`, `$XDG_CONFIG_HOME/certwarden-deploy/config.yaml` and `/etc/certwarden-deploy/config.yaml` when `--config` is not set
+- Server response body is now surfaced on non-success status codes
+- `action` accepts a list of arguments, which is executed directly without a shell (#29)
+- per-certificate `run_on` selects when the action runs: `new`, `changed`, `new_or_changed` (default) or `all` (#31)
+- `actions.enabled` and `--no-actions` deploy the files but skip every post-rollout action. Actions stay on by default (#46)
+- every run now ends with a summary record counting new, changed, unchanged, failed, action_failed and action_skipped certificates (#30)
+- Support for the `privatecerts` and `privatecertchains` download endpoints via the optional `privatecert_path` and `privatecertchain_path` keys (#4)
+- Placeholders `{privatecert_path}`, `{privatecertchain_path}`, `{date}`, `{base_url}`, `{common_name}` and `{cert_id}` (#32)
+- Unrecognised placeholders are now reported with a warning naming the placeholder and the certificate (#32)
+- Optional `privatecert_format` and `privatecertchain_format` keys to download the combined endpoints as `pem`, `pkcs12` or `jks` (#41)
+
+    Change detection hashes the bytes returned by the server. It is unverified whether
+    CertWarden rebuilds `pkcs12`/`jks` containers per request; if it does, every run
+    counts as changed and the action runs on every invocation.
+
+- `cert_secret` and `key_secret` can be read from the environment (`${VAR}`) or from a file (`file:/path`), and fall back to `CERTWARDEN_API_KEY` (#34)
+- Top-level `default_cert_secret` and `default_key_secret` apply to every certificate that does not set its own (#48)
+- `--base-url` and `--api-key` override the config file for a single run (#35)
+- Custom HTTP headers via the `http.headers` config block, for deployments behind an authenticating proxy (#36)
+- Configurable HTTP `timeout`, `retries` and `retry_backoff`, with retries on connection errors, timeouts, 429 and 5xx (#37)
+- Optional `groups` key: certificates that share secrets, paths and an action can be defined once, with `{name}` resolved per certificate. The flat `certificates` list keeps working and both can be used together (#38)
+- `fetch certificate|key|ca|privatecert|privatecertchain <name>` downloads a single artefact to stdout or to `--output`, with no filename template, no change detection and no action (#39)
+- `config init`, `config validate` and `config show` (#40)
+
+    `config validate` makes no network requests at all, so a CI job or a pre-commit hook can lint a
+    config file on a machine that cannot reach the CertWarden instance it names. `config show` prints
+    the effective config with every secret and every `http.headers` value replaced by `<redacted>`,
+    and there is no flag to reveal them. Both desugar `groups` first, so they report and print the
+    flat certificate list a run really acts on (#38, #40).
 
 ### Changed
 
 - Migrated repository to GitHub
 - file write procedure got more resilient
+- a string `action` is now run through `/bin/sh -c`, so pipes, redirects, `&&` and quoting work (#29)
+
+    Previously the string was split on whitespace and exec'd directly, so `action: "cp a b && systemctl reload nginx"`
+    silently ran `cp` with `&&` as an argument. Single commands keep working unchanged. A command that does not exist
+    now fails with the shell's exit code 127 instead of a "file not found" error.
+
+- an `action` key that is present but blank is now a configuration error instead of a silent no-op (#29)
+- a rollout now tells a first deployment apart from an update, so certificates are counted as new instead of changed (#31)
+
+### Fixed
+
+- Certificate rollout failures now exit 2, post-rollout action failures exit 3 (#25)
+
+    This is a behaviour change: a deployment that silently half-failed exited 0 before
+    and exits non-zero now, so a previously green timer may start alerting.
+
+- post-rollout action output is no longer discarded, stdout/stderr and the exit code are now logged (#26)
+- A certificate and its key are now rolled out as a unit: if any artefact fails, none of them are written, so a new certificate can no longer end up next to the old key (#28)
 
 ## [0.2.4] - 2025-07-09
 

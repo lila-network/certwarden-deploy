@@ -7,7 +7,56 @@ base_url: "https://certwarden.example.com"
 # default is false
 disable_certificate_validation: false
 
+# run-wide switches for the post-rollout actions
+actions:
+
+  # set to false to deploy the certificate files but skip every action
+  # the --no-actions flag does the same and overrides this setting
+  # default is true
+  enabled: true
+
+# Default API-Key for every certificate below that does not set its own
+# cert_secret / key_secret. Supports the same ${ENV} and file: references.
+# optional
+# default_cert_secret: "${CERTWARDEN_CERT_SECRET}"
+# default_key_secret: "${CERTWARDEN_KEY_SECRET}"
+
+# Groups of certificates that are deployed the same way.
+# Everything a group sets is a default for the certificates in it, and {name}
+# resolves to each certificate's own name, so the shared values only have to be
+# written once.
+# optional, and can be combined freely with the flat certificates list below
+# groups:
+#
+#   # the group name is a label used in error messages, nothing else
+#   nginx:
+#
+#     # any certificate key that can sensibly be shared may be set here:
+#     # cert_secret, key_secret, cert_path, key_path, ca_path,
+#     # privatecert_path, privatecert_format, privatecertchain_path,
+#     # privatecertchain_format, action and run_on
+#     # the same ${ENV} and file: references work as below
+#     cert_secret: "${NGINX_CERT_SECRET}"
+#     key_secret: "${NGINX_KEY_SECRET}"
+#     cert_path: "/etc/nginx/ssl/{name}.crt"
+#     key_path: "/etc/nginx/ssl/{name}.key"
+#     action: "systemctl reload nginx"
+#     run_on: "new_or_changed"
+#
+#     # the members of the group, each an ordinary certificate definition
+#     certificates:
+#       - name: a.example.com
+#       - name: b.example.com
+#
+#       # a value set here replaces the group's value wholesale
+#       - name: c.example.com
+#         action: "systemctl reload nginx && /usr/local/bin/notify.sh"
+#
+# names must be unique across all groups and the certificates list below
+
+
 # define all managed certificates here
+# this flat list works with or without the groups above
 certificates:
 
     # name is a unique identifier that must start and end with an alphanumeric character, 
@@ -16,7 +65,12 @@ certificates:
   - name: test-certificate.example.com
 
     # Contains the API-Key to fetch the certificate from the server
-    # required
+    # required, unless CERTWARDEN_API_KEY is set in the environment
+    #
+    # Instead of a literal key, this may also reference the value:
+    #   cert_secret: "${CERTWARDEN_APP_CERT_SECRET}"                   # read from the environment
+    #   cert_secret: "file:/run/credentials/certwarden.service/cert"   # read from a file, trimmed
+    # Use $${ if you need a literal value that starts with ${
     cert_secret: examplekey_notvalid_hrzjGDDw8z
 
     # path where to save the certificate
@@ -24,7 +78,8 @@ certificates:
     cert_path: "/path/to/test-certificate.example.com-cert.pem"
 
     # Contains the API-Key to fetch the private key from the server
-    # required
+    # required when key_path is set, unless CERTWARDEN_API_KEY is set
+    # supports the same ${ENV} and file: references as cert_secret
     key_secret: examplekey_notvalid_hrzbbDDw8z
 
     # path where to save the private key
@@ -34,6 +89,79 @@ certificates:
     # path where to save the ca certificate
     ca_path: "/path/to/test-ca-cert.pem"
 
-    # action to run when certificate was updated or --force is on
-    action: "/usr/bin/systemd reload caddy"
+    # path where to save the certificate and the private key in one file
+    # optional, needs cert_secret and key_secret to be set
+    privatecert_path: "/etc/haproxy/certs/app.pem"
 
+    # container to request for privatecert_path: pem, pkcs12 or jks
+    # optional, default is pem
+    #
+    # NOTE: change detection hashes the bytes the server returns. It is not
+    # verified whether CertWarden rebuilds pkcs12/jks containers per request;
+    # if it does, every run counts as changed and the action runs every time.
+    privatecert_format: "pem"
+
+    # path where to save the certificate, the private key and the ca chain in one file
+    # optional, needs cert_secret and key_secret to be set
+    privatecertchain_path: "/etc/haproxy/certs/app-fullchain.pem"
+
+    # container to request for privatecertchain_path: pem, pkcs12 or jks
+    # optional, default is pem
+    privatecertchain_format: "pem"
+
+    # action to run when certificate was updated or --force is on
+    # a string is run through /bin/sh, so pipes, redirects, && and quoting work
+    #
+    # the paths above and the action support these placeholders:
+    #   {name}, {common_name}, {cert_id}  the certificate name
+    #   {date}                            the run date as YYYYMMDD
+    #   {base_url}                        the base_url set above
+    # the action additionally supports the expanded paths:
+    #   {cert_path}, {key_path}, {ca_path}, {privatecert_path}, {privatecertchain_path}
+    #
+    # unrecognised placeholders are left as-is and reported with a warning
+    action: "/usr/bin/systemctl reload caddy"
+
+    # a list is executed directly without a shell instead, which is the safer
+    # choice when an argument contains spaces. Every argument is expanded on its
+    # own, so a placeholder that is a whole argument stays one argument:
+    # action:
+    #   - /usr/local/bin/deploy
+    #   - --cert
+    #   - "{cert_path}"
+    #   - --note
+    #   - "cert renewed"
+
+    # when to run the action:
+    #   new            only when a file did not exist on disk before
+    #   changed        only when a file existed and its content differed
+    #   new_or_changed whenever a file was written (default)
+    #   all            on every run, even when nothing was written
+    # --force runs the action regardless of this setting
+    # default is new_or_changed
+    run_on: "new_or_changed"
+
+
+# Optional block that tunes how requests to the CertWarden server are made
+# http:
+#   # Bounds a single attempt. Go duration string.
+#   # default is 10s
+#   timeout: 10s
+#
+#   # Attempts made after the first one. 0 disables retrying.
+#   # Retries cover connection errors, timeouts, 429 and 5xx.
+#   # 401, 403 and 404 are never retried.
+#   # default is 2
+#   retries: 2
+#
+#   # Base for the exponential backoff between attempts.
+#   # default is 1s
+#   retry_backoff: 2s
+#
+#   # Extra headers sent with every request, for deployments behind an
+#   # authenticating proxy (Cloudflare Access, Authelia, oauth2-proxy, ...).
+#   # Values support the same ${ENV} and file: references as the secrets.
+#   # X-API-Key and User-Agent are owned by this tool and cannot be overridden.
+#   headers:
+#     CF-Access-Client-Id: "${CF_ACCESS_CLIENT_ID}"
+#     CF-Access-Client-Secret: "${CF_ACCESS_CLIENT_SECRET}"

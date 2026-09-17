@@ -7,4 +7,21 @@ var UserAgent = "certwarden-deploy/" + Version + " +https://github.com/lila-netw
 const CertificateApiPath = "/certwarden/api/v1/download/certificates/"
 const KeyApiPath = "/certwarden/api/v1/download/privatekeys/"
 const CaCertificateApiPath = "/certwarden/api/v1/download/certrootchains/"
+
+// PrivateCertApiPath serves the certificate and its private key in one file.
+const PrivateCertApiPath = "/certwarden/api/v1/download/privatecerts/"
+
+// PrivateCertChainApiPath serves the certificate, its private key and the CA
+// chain in one file.
+const PrivateCertChainApiPath = "/certwarden/api/v1/download/privatecertchains/"
+
 const ApiKeyHeaderName = "X-API-Key"
+
+// Download formats accepted by the privatecerts and privatecertchains
+// endpoints. FormatPEM is the server default and is never sent as a query
+// parameter.
+const (
+	FormatPEM    = "pem"
+	FormatPKCS12 = "pkcs12"
+	FormatJKS    = "jks"
+)

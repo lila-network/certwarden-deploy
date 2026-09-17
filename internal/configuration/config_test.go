@@ -114,9 +114,79 @@ certificates:
 		t.Fail()
 	}
 
-	if configAction != data.Certificates[0].Action {
-		t.Logf("Certificates.Action: expected %v, got %v", configAction, data.Certificates[0].Action)
+	if configAction != data.Certificates[0].Action.Command {
+		t.Logf("Certificates.Action: expected %v, got %v", configAction, data.Certificates[0].Action.Command)
 		t.Fail()
 	}
 
+}
+
+// TestUnmarshalHTTPBlockAndDefaultSecrets covers the config surface added by
+// #36, #37 and #48 in the shape a user actually writes it.
+func TestUnmarshalHTTPBlockAndDefaultSecrets(t *testing.T) {
+	yamlData := `
+base_url: "https://certwarden.example.com"
+default_cert_secret: "${CERTWARDEN_CERT_SECRET}"
+default_key_secret: "file:/run/credentials/certwarden.service/key"
+http:
+  timeout: 30s
+  retries: 4
+  retry_backoff: 2s
+  headers:
+    CF-Access-Client-Id: "${CF_ACCESS_CLIENT_ID}"
+    CF-Access-Client-Secret: "${CF_ACCESS_CLIENT_SECRET}"
+certificates:
+  - name: "example.com"
+    cert_path: "/etc/certs/example.com.pem"
+`
+
+	cl := FileConfigLoader{}
+
+	cfg, err := cl.unmarshalDataToConfig([]byte(yamlData))
+	if err != nil {
+		t.Fatalf("got error unmarshaling data: %v", err)
+	}
+
+	if cfg.DefaultCertificateSecret != "${CERTWARDEN_CERT_SECRET}" {
+		t.Errorf("DefaultCertificateSecret: got %v", cfg.DefaultCertificateSecret)
+	}
+
+	if cfg.DefaultKeySecret != "file:/run/credentials/certwarden.service/key" {
+		t.Errorf("DefaultKeySecret: got %v", cfg.DefaultKeySecret)
+	}
+
+	if cfg.HTTP.Timeout != "30s" {
+		t.Errorf("HTTP.Timeout: got %v", cfg.HTTP.Timeout)
+	}
+
+	if cfg.HTTP.Retries == nil || *cfg.HTTP.Retries != 4 {
+		t.Errorf("HTTP.Retries: got %v", cfg.HTTP.Retries)
+	}
+
+	if cfg.HTTP.RetryBackoff != "2s" {
+		t.Errorf("HTTP.RetryBackoff: got %v", cfg.HTTP.RetryBackoff)
+	}
+
+	if got := cfg.HTTP.Headers["CF-Access-Client-Id"]; got != "${CF_ACCESS_CLIENT_ID}" {
+		t.Errorf("HTTP.Headers: got %v", got)
+	}
+
+	if len(cfg.HTTP.Headers) != 2 {
+		t.Errorf("HTTP.Headers: expected 2 entries, got %v", cfg.HTTP.Headers)
+	}
+}
+
+// TestUnmarshalOmittedHTTPBlockLeavesRetriesUnset is what lets HTTPSettings tell
+// "retries: 0" from a missing key.
+func TestUnmarshalOmittedHTTPBlockLeavesRetriesUnset(t *testing.T) {
+	cl := FileConfigLoader{}
+
+	cfg, err := cl.unmarshalDataToConfig([]byte("base_url: \"https://certwarden.example.com\"\n"))
+	if err != nil {
+		t.Fatalf("got error unmarshaling data: %v", err)
+	}
+
+	if cfg.HTTP.Retries != nil {
+		t.Errorf("expected an absent http block to leave retries unset, got %v", *cfg.HTTP.Retries)
+	}
 }
