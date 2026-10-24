@@ -41,7 +41,7 @@ This creates `bin/certwarden-deploy`.
 
 ## First Run
 
-By default, `certwarden-deploy` reads its configuration from `/etc/certwarden-deploy/config.yaml`.
+By default, `certwarden-deploy` looks for `./certwarden-deploy.yaml`, then `$XDG_CONFIG_HOME/certwarden-deploy/config.yaml` (`~/.config/certwarden-deploy/config.yaml` if `XDG_CONFIG_HOME` is unset), then `/etc/certwarden-deploy/config.yaml`, and uses the first one that exists.
 
 Create that file, or point the binary at a different path with `--config`:
 
